@@ -48,10 +48,11 @@ surf bob and spinner timers inside `pose`; both eye passes now see the same
 result. Flat rendering, updates and NPC pose methods remain unchanged. This
 correctness fix is not evidence of a stationary-scene performance improvement.
 
-Optional `POKEPORT_VR_CAMERA_SETBACK_METERS` (0–3, default 0) translates ABOVE
+Optional `POKEPORT_VR_CAMERA_SETBACK_METERS` (0–3, default 0.75) translates ABOVE
 and third-person eye/focus backward along the existing view direction, preserving
-orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The 0.75 m
-comparison value is explicitly provisional. Native recommended eye dimensions
+orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The wearer
+accepted the 0.75 m distance during the 1024-square test; explicit zero restores
+the original distance. Native recommended eye dimensions
 remain the default; no lower resolution has been adopted.
 
 | Gate | Evidence | State |
@@ -62,7 +63,7 @@ remain the default; no lower resolution has been adopted.
 | OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes; corrected source/dump pixels match. Edge labels were outside the visible lens area | Session/copy passed; orientation established by subsequent game wear |
 | Actual game on Frame | Copied Yellow save at Pewter City (22,19): corrected native run captured distinct world eyes after 500 submissions; wearer confirmed upright/aligned imagery | Short run/capture passed; performance unaccepted |
 | Physical input and camera modes | A/B, stick, Menu, View/recentre, launcher selection and voxel Options | Pending wearer |
-| Presentation/comfort | Wearer confirmed corrected upright/aligned world, but rejected closeness, hidden HUD and jitter. New host tests cover actual minimap/Renderer/finishStereo composition, rolls 0/30/90/-45, shared battle plane and CameraMode setback | HUD/setback pending wearer; comfort/performance unaccepted |
+| Presentation/comfort | Wearer confirmed upright/aligned world and accepted 0.75m setback. HUD unreadability was not rechecked before diagnostic exit. Host tests cover actual minimap/Renderer/finishStereo composition and shared battle plane | Distance worn accepted; HUD/battle pending; jitter unaccepted |
 | Audio, sustained performance, sleep/resume | Gameplay session and power-button sleep/recovery | Pending device/wearer |
 
 The ROM-free color probe submits whenever OpenXR says `shouldRender`; an
@@ -84,7 +85,21 @@ capture/readback was enabled and no clean timing interval completed. This is
 not a performance baseline. A subsequent 1024-square diagnostic remained in
 standby before its driver began; it produced no measurement and was stopped.
 The normal title shortcut and empty environment were restored afterwards.
+On the next installed `2baa88c` test, the wearer completed a continuously focused,
+dump-free 1024-square interval: 1,203 submits / 30.0046 s = 40.09 per second,
+frame median/p95 27.61/28.24 ms. Runtime period counts were 929 at about 27.78 ms,
+260 at 13.89 ms and 14 at 41.67 ms. Jitter remained severe when worn. These are
+application submission rates, not compositor output rates. `draw` includes
+`beginFrame`, whose wall duration includes runtime waiting; stage medians cannot
+be summed or treated as CPU-only costs. Full-resolution comparison is pending.
 No lower-resolution default or measured resolution benefit has been adopted.
+
+A read-only pose review found locate/render/submit using the same predicted pose
+and time. Conditional tracking risks remain unmeasured: the small head-translation
+clamp, invalid-pose fallback versus native submission, and reference-space changes.
+The low submission rate does not establish jitter's sole cause. During `off`
+diagnostics, `eyeFoveationSupported=false` is unqueried rather than proof of missing
+hardware support, because the META extension/property is enabled only for `eye`.
 
 ## Device verification on 2026-10-09
 

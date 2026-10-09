@@ -64,9 +64,10 @@ Custom Mac mods are not automatically carried into this pinned assembly. A
 copied save can show the game's existing mod load report before Continue.
 
 `POKEPORT_VR_CAMERA_SETBACK_METERS` optionally moves ABOVE and third-person
-cameras back along their existing viewing direction (0–3 m, default 0).
+cameras back along their existing viewing direction (0–3 m, default 0.75).
 POV, head tracking and the 48 pixels/metre world scale remain unchanged.
-The first comparison uses 0.75 m; that is a trial value, not an accepted default.
+The wearer accepted 0.75 m in the Pewter City comparison. Explicit zero restores
+the original camera distance. HUD readability remains unverified.
 
 ## Verification
 
@@ -90,8 +91,12 @@ native game restored the copied Yellow save in flat mode and completed a short
 focused VR saved-scene run with 300 projection submissions and no bridge error.
 After the origin/pose correction, the wearer confirmed upright imagery and
 binocular alignment, but reported excessive closeness, an inaccessible HUD and
-very low/jittery frame rate. The HUD/battle projection and configurable camera
-setback have passed host render tests and still require wearer verification.
+very low/jittery frame rate. The HUD/battle projection passed host render tests
+and still requires wearer verification; the wearer accepted the 0.75 m setback.
+The focused 1024-square diagnostic submitted 1,203 frames in 30.0046 seconds
+(40.09 per second), with most runtime periods at 27.78 ms. The wearer still
+reported severe jitter. This is one diagnostic sample, not evidence that lowering
+resolution improves performance or that tracking is fault-free.
 Native recommended resolution remains unchanged. Performance remains unresolved;
 this is an unaccepted prototype.
 Current device evidence and remaining gates are recorded in

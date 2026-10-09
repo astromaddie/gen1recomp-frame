@@ -273,12 +273,12 @@ local state = {
   pendingSubmit = nil,
   lastError = nil,
   nativeStatus = nil,
-  cameraSetbackMeters = 0,
+  cameraSetbackMeters = 0.75,
 }
 
 do
   local ok, value = pcall(function() return os.getenv("POKEPORT_VR_CAMERA_SETBACK_METERS") end)
-  value = ok and tonumber(value) or 0
+  value = ok and tonumber(value) or 0.75
   if finiteNumber(value) then state.cameraSetbackMeters = math.max(0, math.min(3, value)) end
 end
 

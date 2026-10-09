@@ -53,14 +53,22 @@ for _,m in ipairs({"above","third","pov"})do
   for _,v in ipairs(matrix)do assert(v==v and math.abs(v)<1e8,"finite actual Voxel3D matrix")end
   zero.shutdown();farther.shutdown()
 end
--- Bounded configuration and absent/invalid values stay conservative.
+-- The wearer accepted 0.75m. Explicit zero preserves the old camera, and
+-- absent/invalid configuration uses the accepted distance.
 mode="third"
 local base=Camera.view(state,160,144,0)
+do
+  local R=runtime(nil);local l,r=R.views(base,1)
+  local center={x=(l.eye.x+r.eye.x)/2,y=(l.eye.y+r.eye.y)/2,z=(l.eye.z+r.eye.z)/2}
+  local distance=math.sqrt((center.x-base.eye.x)^2+(center.y-base.eye.y)^2+(center.z-base.eye.z)^2)
+  near(distance,36,"absent configuration must retain worn accepted setback")
+  R.shutdown()
+end
 for _,value in ipairs({"bad","nan","-1","100"})do
   local R=runtime(value);local l,r=R.views(base,1)
   local center={x=(l.eye.x+r.eye.x)/2,y=(l.eye.y+r.eye.y)/2,z=(l.eye.z+r.eye.z)/2}
   local distance=math.sqrt((center.x-base.eye.x)^2+(center.y-base.eye.y)^2+(center.z-base.eye.z)^2)
-  near(distance,value=="100" and 144 or 0,"bounded setback")
+  near(distance,value=="100" and 144 or value=="-1" and 0 or 36,"bounded setback")
   R.shutdown()
 end
-print("CAMERA_SETBACK_PASS: pinned CameraMode/Voxel3D, ABOVE/3RD0.75m, POV unchanged,48px/m/IPD, bounded invalid config")
+print("CAMERA_SETBACK_PASS: pinned CameraMode/Voxel3D, accepted ABOVE/3RD default0.75m, explicit0, POV unchanged,48px/m/IPD, bounded invalid config")
