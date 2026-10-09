@@ -2220,13 +2220,6 @@ private:
                 if (foveated) return fallbackSwapchains("create foveated GL swapchain", result);
                 return failResult("xrCreateSwapchain", result);
             }
-            if (foveated) {
-                XrSwapchainStateFoveationFB state{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
-                state.profile = m_foveationProfile;
-                result = m_updateSwapchain(swapchain.handle,
-                    reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state));
-                if (XR_FAILED(result)) return fallbackSwapchains("apply foveation profile", result);
-            }
             swapchain.width = width;
             swapchain.height = height;
 
@@ -2249,7 +2242,19 @@ private:
                 return failResult("xrEnumerateSwapchainImages", result);
             }
         }
-        if (foveated) m_foveationApplied = m_foveationProfileMode;
+        if (foveated) {
+            // Enumerate both GL image sets before applying mutable state, so
+            // runtimes can finish materializing their graphics backing first.
+            // A failed update still recreates both eyes at full rate.
+            for (Swapchain& swapchain : m_swapchains) {
+                XrSwapchainStateFoveationFB state{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
+                state.profile = m_foveationProfile;
+                result = m_updateSwapchain(swapchain.handle,
+                    reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state));
+                if (XR_FAILED(result)) return fallbackSwapchains("apply foveation profile", result);
+            }
+            m_foveationApplied = m_foveationProfileMode;
+        }
         // Fixed parameters are retained by the swapchains. Eye mode needs a
         // live profile for the recommended before-render update/query cadence.
         if (m_foveationApplied != "eye-medium") releaseFoveationProfile();

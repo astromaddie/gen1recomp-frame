@@ -35,7 +35,7 @@ struct FoveationTest {
         state->foveationCenter[0]={-0.2f,0.1f};state->foveationCenter[1]={0.3f,-0.1f};
         return rejectQuery?XR_ERROR_RUNTIME_FAILURE:XR_SUCCESS;
     }
-    static inline std::set<XrSwapchain> live;
+    static inline std::set<XrSwapchain> live, enumerated;
     static XrResult XRAPI_PTR profile(XrSession, const XrFoveationProfileCreateInfoFB* info,
                                       XrFoveationProfileFB* out) {
         assert(info->type == XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB);
@@ -65,6 +65,7 @@ struct FoveationTest {
     }
     static XrResult XRAPI_PTR create(XrSession, const XrSwapchainCreateInfo* info, XrSwapchain* out) {
         ++creates;
+        order.push_back("create");
         assert(info->width == 1728 && info->height == 1728);
         if (info->next) {
             auto* f = static_cast<const XrSwapchainCreateInfoFoveationFB*>(info->next);
@@ -75,19 +76,23 @@ struct FoveationTest {
         *out = reinterpret_cast<XrSwapchain>(++serial); live.insert(*out); return XR_SUCCESS;
     }
     static XrResult XRAPI_PTR destroySwapchain(XrSwapchain s) {
-        assert(live.erase(s) == 1); return XR_SUCCESS;
+        assert(live.erase(s) == 1); enumerated.erase(s); return XR_SUCCESS;
     }
-    static XrResult XRAPI_PTR images(XrSwapchain, uint32_t capacity, uint32_t* count,
+    static XrResult XRAPI_PTR images(XrSwapchain s, uint32_t capacity, uint32_t* count,
                                      XrSwapchainImageBaseHeader* out) {
+        assert(live.count(s));
+        order.push_back(capacity ? "images" : "image-count");
         *count = 1;
         if (capacity) {
             assert(out->type == XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR);
             reinterpret_cast<XrSwapchainImageOpenGLKHR*>(out)->image = 1;
+            enumerated.insert(s);
         }
         return XR_SUCCESS;
     }
     static XrResult XRAPI_PTR update(XrSwapchain s, const XrSwapchainStateBaseHeaderFB* base) {
         assert(live.count(s) && base->type == XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB);
+        assert(live.size()==2 && enumerated==live); // Both full GL enumerations precede either update.
         auto* state = reinterpret_cast<const XrSwapchainStateFoveationFB*>(base);
         assert(state->flags == 0 && state->profile && !state->next && profileLive);
         order.push_back("update");
@@ -105,11 +110,12 @@ struct FoveationTest {
         return XR_SUCCESS;
     }
     static void run() {
-        for (int scenario = 0; scenario < 9; ++scenario) {
+        for (int scenario = 0; scenario < 10; ++scenario) {
+            order.clear();assert(live.empty() && enumerated.empty());
             eyeCreates = fixedCreates = profilesDestroyed = updates = creates = 0;
             rejectEye = scenario == 1 || scenario == 2;
             rejectFixed = scenario == 2;
-            rejectUpdate = scenario == 3 ? 2 : 0;
+            rejectUpdate = scenario == 3 ? 2 : scenario == 9 ? 1 : 0;
             rejectCreate = scenario == 4 ? 2 : 0;
             Bridge b;
             b.m_foveationAvailable = scenario != 5;
@@ -138,10 +144,12 @@ struct FoveationTest {
             const bool applied = scenario == 0 || scenario == 1 || scenario == 7 || scenario == 8;
             assert(b.foveationApplied() == (applied ? scenario == 0 ? "eye-medium" : "fixed-medium" : "none"));
             assert(profilesDestroyed == (scenario == 0 || scenario == 2 || scenario == 5 || scenario == 6 ? 0 : 1));
-            assert(updates == (scenario == 2 || scenario == 5 || scenario == 6 ? 0 : scenario == 4 ? 1 : 2));
-            assert(creates == (scenario == 3 || scenario == 4 ? 4 : 2));
+            assert(updates == (scenario == 2 || scenario == 4 || scenario == 5 || scenario == 6 ? 0 : scenario == 9 ? 1 : 2));
+            assert(creates == (scenario == 3 || scenario == 4 || scenario == 9 ? 4 : 2));
+            if (applied) assert((order==std::vector<std::string>{
+                "create","image-count","images","create","image-count","images","update","update"}));
             assert(b.lastError().empty()); // Optional failure never poisons normal XR.
-            if (scenario == 3 || scenario == 4) assert(b.foveationMessage().find("full-rate fallback") != std::string::npos);
+            if (scenario == 3 || scenario == 4 || scenario == 9) assert(b.foveationMessage().find("full-rate fallback") != std::string::npos);
             if (scenario == 0) {
                 b.m_initialized=true;b.m_session=reinterpret_cast<XrSession>(uintptr_t(1));b.m_sessionRunning=true;
                 b.m_sessionState=XR_SESSION_STATE_FOCUSED;
@@ -182,7 +190,7 @@ struct FoveationTest {
                 assert(!b.foveationFrameAttempted() && updates==previousUpdates && queries==previousQueries);
             }
             b.destroy();
-            assert(live.empty() && b.foveationApplied() == "none" && !b.foveationEyeValid());
+            assert(live.empty() && enumerated.empty() && b.foveationApplied() == "none" && !b.foveationEyeValid());
         }
         {
             Bridge b;
@@ -226,7 +234,7 @@ struct FoveationTest {
             assert(b.m_completedCpuStages.empty() && b.m_cpuStagesDropped == 0);
             puts("NATIVE_CPU_STAGE_PASS: exact callback/result, scene/frame clocks, bounded collection, sample transfer, reset");
         }
-        puts("FOVEATION_PROTOCOL_PASS: real bridge profile chains, native dimensions, eye/fixed/off/unsupported, partial second-eye failures, symmetric recreation, cleanup");
+        puts("FOVEATION_PROTOCOL_PASS: real bridge profile chains, native dimensions, both GL enumerations before updates, eye/fixed/off/unsupported, first/second update failures, zero updates on second create failure, symmetric recreation, cleanup");
     }
 };
 }

@@ -326,6 +326,10 @@ initial updates recreate **both** eyes without foveation. Fixed profile handles
 are destroyed once their parameters are copied; eye profiles remain live for
 per-frame refresh and are destroyed after the swapchains on teardown.
 Native recommended eye dimensions are unchanged.
+Both GL swapchains are fully enumerated before initial profile application. This
+allows runtime graphics backing to materialize first; either update failure still
+recreates both eyes at full rate. This ordering is a compatibility measure, not
+proof that a runtime supports foveation on the GL source-rendering path.
 
 The OpenGL swapchain foveation create flags are zero. This is a legal generic
 request; the bridge does not claim QCOM scaled-bin support or pass Vulkan FDM
