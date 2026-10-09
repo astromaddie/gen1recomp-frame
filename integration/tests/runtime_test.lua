@@ -1,0 +1,122 @@
+local runtimePath = assert(arg[1], "pass integration/src/vr/Runtime.lua")
+local fakePath = assert(os.getenv("POKEPORT_XRBRIDGE"))
+local bridge = {
+  ready = true,
+  focused = true,
+  shouldRender = true,
+  period = 11111111,
+  displayTime = 1000000000000000,
+  statusCalls = 0,
+  pollCalls = 0,
+  beginCalls = 0,
+  abortCalls = 0,
+  gpuSubmits = 0,
+}
+
+function bridge.create() return true end
+function bridge.status()
+  bridge.statusCalls = bridge.statusCalls + 1
+  return {
+    available = true,
+    ready = bridge.ready,
+    focused = bridge.focused,
+    shouldRender = bridge.shouldRender,
+    predictedDisplayPeriod = bridge.period,
+    predictedDisplayTime = bridge.displayTime,
+    quitRequested = false,
+  }
+end
+function bridge.pollActions()
+  bridge.pollCalls = bridge.pollCalls + 1
+  return { actions = { a = true, move = { x = 0, y = 0 } } }
+end
+function bridge.beginFrame()
+  bridge.beginCalls = bridge.beginCalls + 1
+  return { fov = { left = -0.7, right = 0.7 } },
+    { fov = { left = -0.7, right = 0.7 } }, bridge.shouldRender
+end
+function bridge.abortFrame() bridge.abortCalls = bridge.abortCalls + 1 end
+function bridge.submitCanvases(left, right)
+  assert(type(left) == "table" and type(right) == "table")
+  bridge.gpuSubmits = bridge.gpuSubmits + 1
+  return true
+end
+function bridge.destroy() end
+
+package.loadlib = function(path, symbol)
+  assert(path == fakePath and symbol == "luaopen_xrbridge")
+  return function() return bridge end
+end
+
+local Runtime = assert(loadfile(runtimePath))()
+Runtime.setEnabled(true)
+assert(Runtime.start())
+assert(Runtime.isBridgeActive())
+assert(Runtime.beginFrame(640, 480))
+assert(Runtime.isFramePaced())
+assert(Runtime.shouldSimulate())
+local dt = Runtime.frameDelta(0.5)
+assert(math.abs(dt - 0.011111111) < 0.000001,
+  "the first paced frame should fall back to OpenXR's predicted period")
+
+local status = Runtime.status()
+assert(status.native.focused and status.native.shouldRender)
+assert(bridge.pollCalls == 0,
+  "status refresh must not sync/consume the action input pulse")
+local left, right = {}, {}
+assert(Runtime.submit(left, right))
+assert(bridge.gpuSubmits == 1,
+  "Linux Canvas bridge path must be preferred over CPU image readback")
+assert(bridge.pollCalls == 0)
+
+bridge.displayTime = bridge.displayTime + 22222222
+assert(Runtime.beginFrame(640, 480))
+assert(math.abs(Runtime.frameDelta(0.5) - 0.022222222) < 0.000001,
+  "simulation delta should use successive predicted display times after a skipped frame")
+Runtime.abortFrame()
+
+bridge.displayTime = bridge.displayTime - 1000000000
+assert(Runtime.beginFrame(640, 480))
+assert(math.abs(Runtime.frameDelta(0.5) - 0.011111111) < 0.000001,
+  "a nonmonotonic XR timestamp should fall back to the display period")
+Runtime.abortFrame()
+
+bridge.focused = false
+assert(not Runtime.shouldSimulate(), "focus loss must freeze game simulation")
+bridge.focused = true
+bridge.shouldRender = false
+bridge.displayTime = bridge.displayTime + 1000000000
+assert(Runtime.beginFrame(640, 480))
+assert(Runtime.isFramePaced(), "standby frames remain compositor paced")
+assert(not Runtime.shouldSimulate(), "standby must freeze game simulation")
+Runtime.abortFrame()
+assert(bridge.abortCalls == 3,
+  "each non-rendered or explicitly discarded frame must be closed exactly once")
+
+bridge.shouldRender = true
+bridge.displayTime = bridge.displayTime + 1000000000
+assert(Runtime.beginFrame(640, 480))
+assert(math.abs(Runtime.frameDelta(0.5) - 0.011111111) < 0.000001,
+  "resuming from standby must not catch up the elapsed display-time gap")
+Runtime.abortFrame()
+
+bridge.focused = false
+assert(not Runtime.shouldSimulate())
+bridge.focused = true
+bridge.displayTime = bridge.displayTime + 1000000000
+assert(Runtime.beginFrame(640, 480))
+assert(math.abs(Runtime.frameDelta(0.5) - 0.011111111) < 0.000001,
+  "resuming after focus loss must not catch up the elapsed display-time gap")
+Runtime.abortFrame()
+
+local actions = Runtime.pollActions()
+assert(actions.a and bridge.pollCalls == 1,
+  "game input polling remains separate from non-consuming status refresh")
+Runtime.shutdown()
+assert(not Runtime.isBridgeActive() and not Runtime.isFramePaced())
+Runtime.setEnabled(false)
+assert(not Runtime.isEnabled() and not Runtime.isBridgeActive())
+assert(Runtime.frameDelta(0.016) == 0.016,
+  "desktop mode must keep its host-timer delta")
+assert(Runtime.shouldSimulate(), "desktop mode must preserve ordinary simulation")
+print("runtime overlay tests passed")

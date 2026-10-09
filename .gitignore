@@ -1,0 +1,8 @@
+/build/
+/runtime/
+/game/
+/xrbridge.so
+/sources/*.tar.*
+__pycache__/
+*.pyc
+.DS_Store
