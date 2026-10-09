@@ -877,6 +877,12 @@ end
 
 -- The shadow cache is optional and keeps the original renderer on bridges
 -- without an exact same-format GPU color/depth copy.
+function Runtime.visibilityKernel()
+  local b=state.bridge
+  if state.bridgeActive and type(b.createVisibilitySelection)=="function"
+    and type(b.selectVisibility)=="function" then return b end
+end
+
 function Runtime.restoreShadowCanvas(color,depth,target)
   local copy=state.bridge and state.bridge.restoreShadowCanvas
   if not state.bridgeActive or type(copy)~="function" then return false,"native depth copy unavailable" end

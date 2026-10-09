@@ -460,3 +460,27 @@ travel, held-source provenance and phase identities allow comparison with native
 CPU samples. Motion is observed, not assumed; leaving the overworld aborts and
 releases inputs. Completion, errors and quit restore wrappers and release D-pad
 sources. The driver neither writes settings nor changes tracked head poses.
+
+The native visibility kernel owns immutable packed bounds/ranges/indices and two
+independent cached masks (stereo eye union and light clip volume). On a changed
+mask it counts retained indices and copies adjacent retained source ranges into
+one reusable LOVE ByteData, preserving exact uint32 values and triangle order.
+LOVE still uploads to separate terrain and shadow index meshes. The kernel uses
+the same double operations, side planes, curve bounds, depth-pull expansion and
+light-space threshold as the Lua path; floating-point contraction is disabled
+only for its translation unit. Typed ByteData sizes and range bounds are checked.
+Missing capability or rejected input retains the Lua selector. Immutable native
+copies add memory per prepared mesh; original Lua records remain for fallback.
+`native_calls` must be nonzero before `native_fallbacks=0` proves native use.
+
+`vr_native_eye_gather` and `vr_native_light_gather` replace the corresponding Lua
+visibility, `vr_range_count` and `vr_range_copy` work. Compare their combined
+exclusive totals with those old scopes; `vr_index_upload` stays separate.
+
+A scoped DRAMALESS stereo preparation shares neighborhood prefetch, captured
+entity poses, palette/atlas generation, distance decisions for the same posed
+object, and fixed figure caster inputs within one synchronous pair. It expires
+on success or error. No simulation/mesh pump runs between those eyes. Per-eye
+facing, figure/billboard matrices, shadow fitting, companion callbacks, LOD inputs
+and graphics submission still execute independently. Flat rendering never opens
+this scope; every later frame rebuilds its preparation from current state.

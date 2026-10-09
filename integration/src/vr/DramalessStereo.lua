@@ -86,10 +86,12 @@ function Stereo.drawWorld(V,ctx)
   local shadows=require("src.vr.ShadowOptimization")
   shadows.begin(V)
   local ok,a,b=xpcall(function()
+    if scene.beginStereoFrame then scene.beginStereoFrame(ctx.state) end
     local a=eyePass(V,ctx,left,"native-xr-left",w,h)
     local b=eyePass(V,ctx,right,"native-xr-right",w,h)
     return a,b
   end,debug.traceback)
+  if scene.endStereoFrame then scene.endStereoFrame() end
   shadows.finish()
   if ok then require("src.vr.Telemetry").recordShadows(shadows.status()) end
   scene.glintStep=step

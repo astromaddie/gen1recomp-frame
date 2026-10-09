@@ -23,7 +23,23 @@ return function(game)
       assert(loadfile(assert(os.getenv("POKEPORT_TEST_CULL_CANDIDATE"))))()}
   end
   local threadTime,selectionCpu
+  local stereoPath=os.getenv("POKEPORT_TEST_STEREO_BASELINE")
+  local stereo,stereos,scenes
+  if stereoPath then
+    assert(implementations,"renderer comparison requires both cullers")
+    stereo=require("src.vr.DramalessStereo")
+    local current={};for k,v in pairs(stereo) do current[k]=v end
+    stereos={assert(loadfile(stereoPath))(),current}
+    scenes={assert(loadfile(assert(os.getenv("POKEPORT_TEST_SCENE_BASELINE"))))(lib),lib.require("VoxelScene")}
+    local originalRequire=lib.require;local selectedScene=scenes[2]
+    lib.require=function(name)if name=="VoxelScene" then return selectedScene end;return originalRequire(name)end
+    scenes.select=function(index)selectedScene=scenes[index]end
+  end
   local function selectCuller(index)
+    if stereos then
+      for k,v in pairs(stereos[index]) do stereo[k]=v end
+      scenes.select(index)
+    end
     Window.finish()
     for k,v in pairs(implementations[index]) do Window[k]=v end
     local begin,finish=Window.begin,Window.finish
@@ -37,6 +53,10 @@ return function(game)
       begin(...)
       -- Time the real private selector, excluding software rasterization.
       -- This QA-only wrapper neither replaces its algorithm nor its result.
+      -- Renderer comparisons swap complete scene modules. Do not mutate
+      -- selector closure upvalues while those ARM64 LuaJIT traces are live.
+      -- Production exclusive telemetry owns selector timing for this path.
+      if stereos then return end
       local draw=lib.require("Voxel3D").draw
       for i=1,20 do
         local name,value=debug.getupvalue(draw,i)
@@ -62,6 +82,11 @@ return function(game)
   end
   local level=tonumber(os.getenv("QA_LEVEL")) or 3
   assert(require("src.render.Pipelines").setLevel("voxel",level)==level)
+  if stereoPath then
+    lib.require("Quality").renderDistanceSetting:sync(32)
+    lib.require("Quality").setting:sync(1)
+    lib.require("AntiAlias").setting:sync(0)
+  end
   for i=1,600 do U.wait(1);if Voxel.ready and Mesher.pending()==0 then break end end
   assert(Voxel.ready)
   -- The fake native boundary owns no graphics: all eye targets, shaders,
@@ -86,6 +111,9 @@ return function(game)
     submitCanvases=function(a,b)latest={a,b};return true end,abortFrame=function()end,
     pollActions=function()return {actions={}}end}
   bridge.restoreShadowCanvas=native.restoreShadowCanvas
+  bridge.createVisibilitySelection=native.createVisibilitySelection
+  bridge.releaseVisibilitySelection=native.releaseVisibilitySelection
+  bridge.selectVisibility=native.selectVisibility
   package.loadlib=function()return function()return bridge end end
   Runtime.shutdown();Runtime.setEnabled(true);assert(Runtime.start())
   U.wait(3)
@@ -124,6 +152,16 @@ return function(game)
     return result
   end
   local counts={}
+  if scenes then
+    local request=Mesher.request
+    Mesher.request=function(...)counts.meshRequests=(counts.meshRequests or 0)+1;return request(...)end
+    local Atlas=lib.require("TerrainAtlas");local atlas=Atlas.forMap
+    Atlas.forMap=function(...)counts.atlasQueries=(counts.atlasQueries or 0)+1;return atlas(...)end
+    for _,npc in ipairs(game.overworld.entities) do if npc~=game.overworld.player and npc.pose then
+      local pose=npc.pose
+      npc.pose=function(...)counts.npcPoses=(counts.npcPoses or 0)+1;return pose(...)end
+    end end
+  end
   local shadow=lib.require("ShadowMap")
   local originalBegin=shadow.begin
   shadow.begin=function(...)
@@ -152,20 +190,25 @@ return function(game)
     -- scene value so camera-fit comparisons differ only in the shadow path.
     local Scene=lib.require("VoxelScene");local glint=Scene.glintStep
     Scene.glintStep=function(g)return g end
+    if scenes then for i=1,2 do scenes[i].glintStep=function()return {phase=0,amp=0}end end end
     local function pair(label,cold)
+      if scenes then print("RENDER_PAIR_BEGIN",label) end
       if cold then Optimization.release() end
       Runtime.beginFrame(1728,1728)
       if implementations then selectCuller(1) end
       cullerMode=unculledReference and "off" or "frustum"
       mode=implementations and "on" or "off";shadow.discard();counts={}
       selectionCpu=0
+      if scenes then print("RENDER_LEG",label,"baseline") end
       local started=threadTime();originalDraw();local beforeCpu=(threadTime()-started)*1000
       local beforeSelection=selectionCpu*1000
       local beforeCuller=Window.status()
       local a=snapshot(label.."-original");local before=counts
       if implementations then selectCuller(2) end
       cullerMode="frustum"
-      mode="on";shadow.discard();counts={};started=threadTime();selectionCpu=0;originalDraw()
+      mode="on";shadow.discard();counts={};started=threadTime();selectionCpu=0
+      if scenes then print("RENDER_LEG",label,"candidate") end
+      originalDraw()
       local afterCpu=(threadTime()-started)*1000
       local afterCuller=Window.status()
       local b=snapshot(label.."-optimized");local after=counts
@@ -186,11 +229,20 @@ return function(game)
         "source_dynamic",status.sourceDynamicTriangles,"restores",status.restores,
         "max_channel_error",maxError,"mean_channel_error",totalError/(2*1728*1728*3),"different_pixels",changed)
       assert(changed==0,"complete stereo image differs: "..label)
+      if scenes then
+        assert((afterCuller.nativeCalls or 0)>0 and (afterCuller.nativeFallbacks or 0)==0,"native gather unavailable or fell back")
+        print("NATIVE_GATHER_PASS",label,"calls",afterCuller.nativeCalls,"fallbacks",afterCuller.nativeFallbacks or 0)
+        print("SHARED_PREP_COMPARE",label,"mesh_requests",before.meshRequests or 0,after.meshRequests or 0,
+          "atlas_queries",before.atlasQueries or 0,after.atlasQueries or 0,"npc_poses",before.npcPoses or 0,after.npcPoses or 0)
+        assert((after.meshRequests or 0)<=(before.meshRequests or 0))
+        assert((after.npcPoses or 0)<=(before.npcPoses or 0))
+      end
       if implementations then
         assert(beforeCuller.pendingDraws==0 and afterCuller.pendingDraws==0,"head-motion comparison includes unprepared meshes")
         if not unculledReference then assert(beforeCuller.selectedIndices==afterCuller.selectedIndices and beforeCuller.indexUpdates==afterCuller.indexUpdates) end
         print(unculledReference and "UNCULLED_HEAD_COMPARE" or "HEAD_MOTION_COMPARE",label,"baseline_main_cpu_ms",beforeCpu,"candidate_main_cpu_ms",afterCpu,
-          "baseline_selection_ms",beforeSelection,"candidate_selection_ms",selectionCpu*1000,
+          "baseline_selection_ms",stereos and "unavailable" or beforeSelection,
+          "candidate_selection_ms",stereos and "unavailable" or selectionCpu*1000,
           "index_updates",afterCuller.indexUpdates,"selected_indices",afterCuller.selectedIndices,"different_pixels",changed)
       end
       for _,images in ipairs({a,b}) do for _,im in ipairs(images) do im:release() end end
@@ -208,6 +260,18 @@ return function(game)
           z=math.cos(y)*math.cos(pitch)*math.sin(roll)-math.sin(y)*math.sin(pitch)*math.cos(roll),
           w=math.cos(y)*math.cos(pitch)*math.cos(roll)+math.sin(y)*math.sin(pitch)*math.sin(roll)}
         pair("head-"..step.."-yaw"..degrees)
+      end
+      if scenes then
+        local ow=game.overworld;local camera,player=ow.camera,ow.player
+        for step=1,3 do
+          camera.x=camera.x+3;camera.y=camera.y+2;player.px=player.px+3
+          pair("camera-player-"..step)
+        end
+        for _,npc in ipairs(ow.entities) do if npc~=player and npc.pose then
+          npc.px=npc.px+2;npc.moving=true;npc.progress=6;pair("npc-animation");break
+        end end
+        if ow.map.id=="PEWTER_CITY" then fixedHours=(fixedHours+6)%24;pair("sunlight-fit") end
+        local tiles=require("src.render.TileRenderer");tiles.tick(0.5);pair("atlas-animation")
       end
     else
     pair("cold",true);pair("warm")

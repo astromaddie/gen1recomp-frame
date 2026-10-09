@@ -49,6 +49,37 @@ function love.load()
     return result[1],result[2]
   end
   local Runtime={views=views};package.loaded["src.vr.Runtime"]=Runtime
+  local native
+  local nativePath=os.getenv("POKEPORT_TEST_BRIDGE")
+  if nativePath then
+    native=assert(package.loadlib(nativePath,"luaopen_xrbridge"))()
+    assert(type(native.createVisibilitySelection)=="function" and type(native.selectVisibility)=="function")
+    Runtime.visibilityKernel=function()return native end
+    local bad=love.data.newByteData(1)
+    assert(not native.createVisibilitySelection({},bad,bad))
+    assert(not native.createVisibilitySelection(bad,bad,bad))
+    bad:release()
+    assert(not native.createVisibilitySelection(bad,bad,bad),"released ByteData accepted")
+    local ffi=require("ffi")
+    local bounds=love.data.newByteData(48);local ranges=love.data.newByteData(12);local source=love.data.newByteData(24)
+    local out=love.data.newByteData(24);local planeData=love.data.newByteData(256)
+    ffi.fill(bounds:getFFIPointer(),48);ffi.fill(planeData:getFFIPointer(),256)
+    local r=ffi.cast("uint32_t*",ranges:getFFIPointer());r[0]=0;r[1]=6;r[2]=0
+    local p=ffi.cast("uint32_t*",source:getFFIPointer());for i=0,5 do p[i]=i end
+    local selection=assert(native.createVisibilitySelection(bounds,ranges,source))
+    local n,changed=native.selectVisibility(selection,out,planeData,false,0,0,0,0,0,0,0)
+    assert(n==6 and changed)
+    assert(not native.selectVisibility(selection,planeData,planeData,false,0,0,0,0,0,0,0),"alias accepted")
+    assert(not native.selectVisibility(selection,out,source,false,0,0,0,0,0,0,0),"wrong plane length accepted")
+    assert(not native.selectVisibility(selection,out,planeData,false,0,0,0,-1,0,0,0),"negative pull accepted")
+    n,changed=native.selectVisibility(selection,out,planeData,false,0,0,0,0,0,0,0)
+    assert(n==6 and not changed,"invalid input changed cached selection")
+    out:release();assert(not native.selectVisibility(selection,out,planeData,false,0,0,0,0,0,0,0))
+    native.releaseVisibilitySelection(selection);native.releaseVisibilitySelection(selection)
+    assert(not native.selectVisibility(selection,source,planeData,false,0,0,0,0,0,0,0),"released native handle accepted")
+    for _,data in ipairs({bounds,ranges,source,planeData})do data:release()end
+    print("NATIVE_SELECTION_API_PASS: real ByteData types, released objects, sizes, aliases, errors and unchanged masks")
+  end
   local originalScene=modules.VoxelScene.render
   local function frame()
     draws={};Window.begin(lib);local left=Runtime.views()
@@ -151,6 +182,8 @@ function love.load()
       local savedNew=love.data.newByteData;local allocations=0
       love.data.newByteData=function(...)allocations=allocations+1;return savedNew(...)end
       for pose=1,40 do
+        modules.Voxel3D.curveK=pose%3==0 and 0.0001 or 0
+        modules.Voxel3D.curveX=170;modules.Voxel3D.curveZ=90
         cam.x=160+180*math.sin(pose*0.37);cam.y=100+90*math.cos(pose*0.21);cam.yaw=math.sin(pose*0.27)*1.2
         model=pose%2==0 and Mat.translate(-64,0,32) or nil
         local maps={};local light=Mat.mul(Mat.scale(1/120,1/80,1/90),Mat.translate(-cam.x,-32,-cam.y))
@@ -172,6 +205,14 @@ function love.load()
       cam.x=50;cam.yaw=0.8;frame();Window.shadowSelection(terrain,nil,light)
       love.data.newByteData=savedNew
       assert(allocations==before,"candidate reallocates index scratch during head motion")
+      if native then
+        local select=native.selectVisibility
+        native.selectVisibility=function()return false,"injected kernel rejection"end
+        Window=candidate;cam.x=250;cam.yaw=-0.3;frame();local actual=bytes(draws[1] and draws[1][1])
+        assert((Window.status().nativeFallbacks or 0)>0,"native rejection did not use Lua fallback")
+        native.selectVisibility=select
+        Window=baseline;frame();assert(actual==bytes(draws[1] and draws[1][1]),"fallback changed ordered indices")
+      end
     end
     baseline.release();Window=candidate
   end

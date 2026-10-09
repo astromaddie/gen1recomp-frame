@@ -8,6 +8,7 @@ local ffi = require("ffi")
 local cache, hooks, tick, frusta = {}, {}, 0, nil
 local graphics, metrics
 local profile,profileRestores
+local nativePlanes,nativeLightPlanes
 local CELL, MARGIN = 32, 8
 local function clock() return love.timer.getTime() end
 local function prepare(record)
@@ -45,6 +46,25 @@ local function prepare(record)
     if first%1536==1 then coroutine.yield() end
   end
   record.ranges,record.groups=ranges,groups
+  local Runtime=require("src.vr.Runtime")
+  local kernel=Runtime.visibilityKernel and Runtime.visibilityKernel()
+  if kernel and not record.visibilityOnly then
+    local bounds=love.data.newByteData(#groups*48)
+    local values=ffi.cast("double*",bounds:getFFIPointer())
+    for i,g in ipairs(groups) do
+      g.nativeIndex=i-1;local j=(i-1)*6
+      values[j],values[j+1],values[j+2]=g.x0,g.y0,g.z0
+      values[j+3],values[j+4],values[j+5]=g.x1,g.y1,g.z1
+    end
+    local packedRanges=love.data.newByteData(#ranges*12)
+    local values=ffi.cast("uint32_t*",packedRanges:getFFIPointer())
+    for i,r in ipairs(ranges) do
+      local j=(i-1)*3;values[j],values[j+1],values[j+2]=r[1]-1,r[2]-r[1]+1,r[3].nativeIndex
+    end
+    local ok,value=pcall(kernel.createVisibilitySelection,bounds,packedRanges,record.packed)
+    bounds:release();packedRanges:release()
+    if ok and value then record.native=value;record.kernel=kernel end
+  end
   if not record.visibilityOnly then
     local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},count,"triangles","dynamic")
     record.selected=selected
@@ -53,13 +73,21 @@ local function prepare(record)
   end
   record.ready=true
 end
+local function releaseNative(record)
+  if record.native and record.kernel.releaseVisibilitySelection then
+    pcall(record.kernel.releaseVisibilitySelection,record.native)
+  end
+  record.native=nil;record.kernel=nil
+end
 local function release(record)
+  releaseNative(record)
   if record.selected then record.selected:release() end
   if record.shadowSelected then record.shadowSelected:release() end
   if record.packed then record.packed:release() end
   if record.scratch then record.scratch:release() end
 end
-local function uploadSelection(record,selected,field,n)
+local function uploadSelection(record,selected,field,n,nativeReady)
+  if not nativeReady then
   local copyScope=profile and profile.beginCpuScope("vr_range_copy")
   if not record.scratch then record.scratch=love.data.newByteData(record.total*4) end
   local out=ffi.cast("uint32_t*",record.scratch:getFFIPointer())
@@ -70,11 +98,34 @@ local function uploadSelection(record,selected,field,n)
     index=index+count
   end end
   if profile then profile.endCpuScope(copyScope) end
+  end
   -- LOVE copies this prefix synchronously; one CPU scratch buffer can serve
   -- the independent terrain and shadow GPU index buffers without aliasing.
   local uploadScope=profile and profile.beginCpuScope("vr_index_upload")
   selected:setVertexMap(record.scratch,"uint32",n)
   if profile then profile.endCpuScope(uploadScope) end
+end
+-- All masks, count scans and ordered memcpy ranges stay in one native call.
+-- A rejected capability/input drops back to the original independent Lua masks.
+local function nativeSelection(record,planes,shadow,ox,oy,oz,pull)
+  if not record.native or not planes then return nil end
+  if not record.scratch then record.scratch=love.data.newByteData(record.total*4) end
+  local scope=profile and profile.beginCpuScope(shadow and "vr_native_light_gather" or "vr_native_eye_gather")
+  metrics.nativeCalls=(metrics.nativeCalls or 0)+1
+  local ok,n,changed=pcall(record.kernel.selectVisibility,record.native,record.scratch,planes,shadow,
+    ox or 0,oy or 0,oz or 0,pull or 0,graphics.curveK or 0,graphics.curveX or 0,graphics.curveZ or 0)
+  if profile then profile.endCpuScope(scope) end
+  if ok and type(n)=="number" then return n,changed end
+  releaseNative(record)
+  metrics.nativeFallbacks=(metrics.nativeFallbacks or 0)+1
+  return nil
+end
+local function packedPlanes(planes,previous)
+  local n=#planes*4
+  local data=previous or love.data.newByteData(n*8)
+  local out=ffi.cast("double*",data:getFFIPointer())
+  for i,p in ipairs(planes) do for j=1,4 do out[(i-1)*4+j-1]=p[j] end end
+  return data
 end
 local function register(mesh,visibilityOnly)
   if not mesh then return end
@@ -167,6 +218,14 @@ local function selection(mesh,model,pull)
   local key=tick..":"..ox..":"..oy..":"..oz..":"..pull
   if record.frameKey~=key then
     record.frameKey=key
+    local nativeCount,nativeChanged=nativeSelection(record,nativePlanes,false,ox,oy,oz,pull)
+    if nativeCount then
+      record.count=nativeCount
+      if nativeChanged and nativeCount>0 and nativeCount<record.total then
+        uploadSelection(record,record.selected,"keep",nativeCount,true)
+        metrics.indexUpdates=metrics.indexUpdates+1
+      end
+    else
     local scope=profile and profile.beginCpuScope("vr_eye_visibility")
     local changed=false
     for _,g in ipairs(record.groups) do
@@ -186,6 +245,7 @@ local function selection(mesh,model,pull)
       end
     end
   end
+    end
   metrics.selectedIndices=metrics.selectedIndices+record.count
   if record.count==0 then return nil end
   return record.count==record.total and mesh or record.selected
@@ -241,6 +301,7 @@ function Culling.begin(lib)
       local a,b=planes(left,Mat),planes(right,Mat)
       if a and b then
         frusta={a,b}
+        nativePlanes=packedPlanes({a[1],a[2],a[3],a[4],b[1],b[2],b[3],b[4]},nativePlanes)
         -- VRStereo copies camera fields. A mono POV fallback also owns a
         -- camera, so only our actual tracked pair may consume these planes.
         left.__frameCullingTick=tick;right.__frameCullingTick=tick
@@ -295,7 +356,13 @@ function Culling.shadowSelection(mesh,model,clip)
     local p={};for j=1,4 do p[j]=m[12+j]+sign*m[axis*4+j] end
     planes[#planes+1]=p
   end end
-  local changed=false
+  if profile then profile.endCpuScope(visibilityScope) end
+  nativeLightPlanes=packedPlanes(planes,nativeLightPlanes)
+  local nativeCount,nativeChanged=nativeSelection(record,nativeLightPlanes,true)
+  local changed=nativeChanged
+  if nativeCount then record.shadowCount=nativeCount else
+  visibilityScope=profile and profile.beginCpuScope("vr_light_visibility")
+  changed=false
   for _,g in ipairs(record.groups) do
     local keep=true
     for _,p in ipairs(planes) do
@@ -306,12 +373,16 @@ function Culling.shadowSelection(mesh,model,clip)
     if keep~=g.shadowKeep then changed=true;g.shadowKeep=keep end
   end
   if profile then profile.endCpuScope(visibilityScope) end
+  end
   if changed then
+    if not nativeCount then
     local countScope=profile and profile.beginCpuScope("vr_range_count")
     local n=0
     for _,r in ipairs(record.ranges) do if r[3].shadowKeep then n=n+r[2]-r[1]+1 end end
     record.shadowCount=n
     if profile then profile.endCpuScope(countScope) end
+    end
+    local n=record.shadowCount
     if n>0 and n<record.total then
       if not record.shadowSelected then
         local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},mesh:getVertexCount(),"triangles","dynamic")
@@ -319,7 +390,7 @@ function Culling.shadowSelection(mesh,model,clip)
         for _,a in ipairs(mesh:getVertexFormat()) do selected:attachAttribute(a[1],mesh) end
         record.shadowSelected=selected
       end
-      uploadSelection(record,record.shadowSelected,"shadowKeep",n)
+      uploadSelection(record,record.shadowSelected,"shadowKeep",n,nativeCount~=nil)
     end
   end
   if record.shadowCount==0 then return nil,record.total,0 end
@@ -327,5 +398,7 @@ function Culling.shadowSelection(mesh,model,clip)
 end
 function Culling.release()
   Culling.finish();for _,record in pairs(cache) do release(record) end;cache={}
+  if nativePlanes then nativePlanes:release();nativePlanes=nil end
+  if nativeLightPlanes then nativeLightPlanes:release();nativeLightPlanes=nil end
 end
 return Culling

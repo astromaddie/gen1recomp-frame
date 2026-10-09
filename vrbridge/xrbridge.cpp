@@ -56,6 +56,8 @@ extern "C" {
 #include "common/runtime.h"
 #include "modules/graphics/Canvas.h"
 #include "Telemetry.h"
+#include "modules/data/ByteData.h"
+#include "VisibilitySelection.h"
 #endif
 
 namespace {
@@ -3488,6 +3490,74 @@ static int l_submit(lua_State* L) {
 #if defined(__linux__)
 static bool flushLoveBatch(lua_State* L);
 
+#if defined(__linux__)
+static love::Type* selectionByteType(lua_State* L) {
+    static love::Type* type=nullptr;
+    if(type)return type;
+    const int top=lua_gettop(L);
+    lua_getglobal(L,"love");
+    if(lua_istable(L,-1))lua_getfield(L,-1,"data");
+    if(lua_istable(L,-1))lua_getfield(L,-1,"newByteData");
+    if(lua_isfunction(L,-1)) {
+        lua_pushinteger(L,1);
+        if(lua_pcall(L,1,1,0)==0 && lua_type(L,-1)==LUA_TUSERDATA && lua_objlen(L,-1)>=sizeof(love::Proxy)) {
+            auto* p=static_cast<love::Proxy*>(lua_touserdata(L,-1));
+            if(p && p->object)type=p->type;
+        }
+    }
+    lua_settop(L,top);return type;
+}
+static love::data::ByteData* selectionBytes(lua_State* L,int index) {
+    auto* type=selectionByteType(L);
+    if(!type)return nullptr;
+    if(lua_type(L,index)!=LUA_TUSERDATA || lua_objlen(L,index)<sizeof(love::Proxy))return nullptr;
+    auto* p=static_cast<love::Proxy*>(lua_touserdata(L,index));
+    if(!p || !p->object || p->type!=type)return nullptr;
+    return static_cast<love::data::ByteData*>(p->object);
+}
+static const char* kSelectionType="xrbridge.VisibilitySelection";
+static int l_selectionGc(lua_State* L) {
+    auto** p=static_cast<visibility::Selection**>(luaL_checkudata(L,1,kSelectionType));
+    delete *p;*p=nullptr;return 0;
+}
+static int l_createVisibilitySelection(lua_State* L) {
+    auto* bounds=selectionBytes(L,1);auto* ranges=selectionBytes(L,2);auto* indices=selectionBytes(L,3);
+    if(!bounds||!ranges||!indices || bounds->getSize()%sizeof(visibility::Bounds)
+       ||ranges->getSize()%sizeof(visibility::Range)||indices->getSize()%sizeof(uint32_t))
+        return pushFailure(L,"visibility selection requires packed LOVE ByteData");
+    auto** p=static_cast<visibility::Selection**>(lua_newuserdata(L,sizeof(visibility::Selection*)));
+    *p=nullptr;
+    if(luaL_newmetatable(L,kSelectionType)) {lua_pushcfunction(L,l_selectionGc);lua_setfield(L,-2,"__gc");}
+    lua_setmetatable(L,-2);
+    try {
+        *p=new visibility::Selection(static_cast<const visibility::Bounds*>(bounds->getData()),bounds->getSize()/sizeof(visibility::Bounds),
+            static_cast<const visibility::Range*>(ranges->getData()),ranges->getSize()/sizeof(visibility::Range),
+            static_cast<const uint32_t*>(indices->getData()),indices->getSize()/sizeof(uint32_t));
+        return 1;
+    } catch(const std::exception& e) {return pushFailure(L,e.what());}
+}
+static int l_selectVisibility(lua_State* L) {
+    auto** p=static_cast<visibility::Selection**>(luaL_checkudata(L,1,kSelectionType));
+    auto* output=selectionBytes(L,2);auto* planes=selectionBytes(L,3);
+    visibility::View view;view.shadow=lua_toboolean(L,4)!=0;
+    const size_t planeBytes=(view.shadow?6:8)*4*sizeof(double);
+    if(!*p||!output||!planes||planes->getSize()!=planeBytes||output->getSize()<(*p)->size()*sizeof(uint32_t)
+       ||output==planes)return pushFailure(L,"invalid visibility output/planes");
+    std::memcpy(view.planes,planes->getData(),planeBytes);
+    for(size_t i=0;i<planeBytes/sizeof(double);++i)
+        if(!std::isfinite((&view.planes[0][0])[i]))return pushFailure(L,"nonfinite visibility plane");
+    double* values[]={&view.ox,&view.oy,&view.oz,&view.pull,&view.k,&view.cx,&view.cz};
+    for(int i=0;i<7;++i) {
+        if(lua_type(L,5+i)!=LUA_TNUMBER || !std::isfinite(lua_tonumber(L,5+i)))
+            return pushFailure(L,"invalid visibility parameter");
+        *values[i]=lua_tonumber(L,5+i);
+    }
+    if(view.pull<0)return pushFailure(L,"negative visibility pull");
+    const auto result=(*p)->select(view,static_cast<uint32_t*>(output->getData()));
+    lua_pushnumber(L,static_cast<lua_Number>(result.count));lua_pushboolean(L,result.changed);return 2;
+}
+#endif
+
 static int l_restoreShadowCanvas(lua_State* L) {
     try {
         love::graphics::Canvas* canvases[3]{};
@@ -4025,6 +4095,11 @@ extern "C" __attribute__((visibility("default"))) int luaopen_xrbridge(lua_State
 #if defined(__linux__)
         {"submitCanvases", l_submitCanvases},
         {"restoreShadowCanvas", l_restoreShadowCanvas},
+#if defined(__linux__)
+        {"createVisibilitySelection", l_createVisibilitySelection},
+        {"releaseVisibilitySelection", l_selectionGc},
+        {"selectVisibility", l_selectVisibility},
+#endif
         {"telemetryClock", l_telemetryClock},
         {"telemetryContext", l_telemetryContext},
         {"telemetrySample", l_telemetrySample},

@@ -112,6 +112,8 @@ local function collectCuller(bucket)
   local culler = bucket.culler
   culler.frames = culler.frames + 1
   culler.indexUpdates = culler.indexUpdates + safeNumber(status.indexUpdates)
+  culler.nativeCalls = (culler.nativeCalls or 0) + safeNumber(status.nativeCalls)
+  culler.nativeFallbacks = (culler.nativeFallbacks or 0) + safeNumber(status.nativeFallbacks)
   culler.sourceIndices = culler.sourceIndices + safeNumber(status.sourceIndices)
   culler.selectedIndices = culler.selectedIndices + safeNumber(status.selectedIndices)
   culler.pendingDraws = culler.pendingDraws + safeNumber(status.pendingDraws)
@@ -445,10 +447,10 @@ local function printSceneBuckets(loadSample, windowScene)
     end
     if bucket.frames > 0 then
       local culler = bucket.culler
-      local cullerText = string.format("culler_mode=%s culler_active=%s culler_samples=%d index_updates=%d source_indices=%d selected_indices=%d pending_draws=%d water_passes_skipped=%d",
+      local cullerText = string.format("culler_mode=%s culler_active=%s culler_samples=%d index_updates=%d source_indices=%d selected_indices=%d pending_draws=%d water_passes_skipped=%d native_calls=%d native_fallbacks=%d",
         tostring(culler.mode or "unavailable"), tostring(culler.active == true),
         culler.frames, culler.indexUpdates, culler.sourceIndices,
-        culler.selectedIndices, culler.pendingDraws, culler.waterPassesSkipped)
+        culler.selectedIndices, culler.pendingDraws, culler.waterPassesSkipped, culler.nativeCalls or 0, culler.nativeFallbacks or 0)
       local waitWall = string.format("n=%d p50_ms=%s p95_ms=%s",
         #bucket.xrWaitWall, milliseconds(percentile(bucket.xrWaitWall, 0.50)),
         milliseconds(percentile(bucket.xrWaitWall, 0.95)))

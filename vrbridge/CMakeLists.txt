@@ -44,7 +44,9 @@ if(NOT LUAJIT_LIBRARY)
     message(FATAL_ERROR "LuaJIT library not found. Set LUAJIT_LIBRARY.")
 endif()
 
-add_library(xrbridge MODULE xrbridge.cpp)
+add_library(xrbridge MODULE xrbridge.cpp VisibilitySelection.cpp)
+# Preserve the Lua selector's ordered double operations only in this kernel.
+set_source_files_properties(VisibilitySelection.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 target_include_directories(xrbridge PRIVATE
     "${OPENXR_INCLUDE_DIR}"
     "${LUAJIT_INCLUDE_DIR}")

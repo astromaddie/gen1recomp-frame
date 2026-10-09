@@ -148,7 +148,7 @@ docker run --rm --platform linux/arm64 -v "$PWD:/kit:ro" \
   g++ -std=c++17 -O1 -DXRBRIDGE_LOVE_ABI_11_5=1 \
     -I/opt/openxr/include -I/usr/include/luajit-2.1 \
     -I/opt/love-11.5/src -I/opt/love-11.5/src/modules \
-    /kit/integration/tests/native_foveation.cpp -L/opt/love/lib \
+    /kit/integration/tests/native_foveation.cpp /kit/vrbridge/VisibilitySelection.cpp -ffp-contract=off -L/opt/love/lib \
     -llove-11.5 -lluajit-5.1 /opt/openxr/lib/libopenxr_loader.a \
     -lGL -lX11 -ldl -pthread -o /tmp/foveation-test
   LD_LIBRARY_PATH=/opt/love/lib /tmp/foveation-test'
@@ -254,3 +254,23 @@ helper, and `POKEPORT_VR_TELEMETRY=1`. Allow saved-scene startup plus eight seco
 warmup and 32 seconds measurement. Read actual movement/scene/settings/eye-size
 records before comparing standing and walking. It keeps yielding after completion
 for evidence collection; the operational owner terminates its owned process.
+
+Native visibility checks: compile `vrbridge/tests/visibility_test.cpp` with
+`vrbridge/VisibilitySelection.cpp`, C++17 and `-ffp-contract=off`. Run the existing
+LOVE `draw_distance` regression with `POKEPORT_TEST_BRIDGE` set to the candidate
+module and `POKEPORT_TEST_CULL_BASELINE` to the frozen previous selector. It checks
+real ByteData rejection/lifetime, 80 moving stereo/light ordered-index cases,
+curved terrain, separate GPU buffers, reusable allocation and native rejection
+fallback. `stereo_lifecycle_test.lua` exercises production stereo success, error
+and nonrenderable cleanup with a controlled graphics boundary.
+
+For complete same-update renderer comparisons, the private `shadow_scene_driver`
+also accepts `POKEPORT_TEST_STEREO_BASELINE` and `POKEPORT_TEST_SCENE_BASELINE`,
+pointing to the prior adapter and already patched private VoxelScene. This mode
+uses MEDIUM32/FULL/AAoff, compares moving tracked poses and game camera/player,
+NPC/atlas animation and lighting, and records actual preparation counts and native
+use. It does not hot-edit selector closure upvalues for timing: that QA profiler
+can fault ARM64 LuaJIT when combined with scene-module swapping. Use the production
+exclusive stages for selector timing and keep host software-GL cost separate from
+Frame measurements. Source/header kernel hashes are included in native build and
+package receipts.
