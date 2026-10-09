@@ -61,6 +61,16 @@ eye maximum), before releasing the OpenXR image. For a gameplay scene, set
 and capture during the 60th successful projection submission; delays are capped
 at 3,600 submissions. The normal game launcher does not enable diagnostics.
 
+For an interactive startup failure, `POKEPORT_VR_STARTUP_TRACE=1` logs and
+flushes load/Play/game-boot milestones and up to 180 once-per-second frame
+samples. Each sampled frame records XR begin, update, draw and completion,
+graphics availability, raw session/focus/render state, submitted-frame counts
+and runtime errors. It does not bypass the launcher, inject input, force XR
+rendering or change saved options. The VR launcher adapter stops forwarding
+input immediately when Play or an editor callback replaces the launcher;
+the new screen starts updating on the following frame. Callback failures
+propagate to the normal error handler rather than being swallowed.
+
 Build the bridge with the exact CMake inputs from the ARM64 builder image. The
 script checks the produced ELF with `readelf`, then checks `ldd` with
 `/usr/local` removed and the exported runtime libraries first in the search
@@ -104,6 +114,8 @@ luajit integration/tests/telemetry_test.lua integration/src/vr/Telemetry.lua
 luajit integration/tests/runtime_telemetry_test.lua integration/src/vr/Runtime.lua
 luajit integration/tests/vr_telemetry_driver_test.lua integration/tests/vr_telemetry_driver.lua
 POKEPORT_VR_REQUIRED=1 luajit integration/tests/main_overlay_test.lua /path/to/private-local-assembly/game/main.lua
+POKEPORT_VR_REQUIRED=1 luajit integration/tests/launcher_transition_test.lua /path/to/private-local-assembly/game/main.lua /path/to/private-local-assembly/game/src/import/RomImporter.lua
+luajit integration/tests/startup_trace_test.lua integration/src/vr/StartupTrace.lua
 luajit integration/tests/probe_policy_test.lua integration/probe/main.lua
 ```
 
