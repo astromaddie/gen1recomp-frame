@@ -6,6 +6,7 @@
 -- harmless desktop stereo-preview state.
 
 local Runtime = {}
+local monoPanel
 
 local DEFAULT_IPD = 0.064
 local DEFAULT_FOV = math.rad(90)
@@ -409,25 +410,52 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
   -- OpenXR reports meters in a local reference space; the voxel renderer uses
   -- map pixels. Anchor the first tracked pose to the current game camera and
   -- apply only subsequent movement in a small, explicit world scale.
+  local center = defaultCenter(baseCamera)
+  local baseFocus = defaultFocus(baseCamera, center)
+  local baseForward = normalizedVector({
+    x = baseFocus.x - center.x,
+    y = baseFocus.y - center.y,
+    z = baseFocus.z - center.z,
+  }, { x = 0, y = 0, z = -1 })
+  local baseRight = normalizedVector(crossVector(baseForward,
+    { x = 0, y = 1, z = 0 }), { x = 1, y = 0, z = 0 })
+  local baseUp = crossVector(baseRight, baseForward)
   local eye = copyVector(fallback.eye)
   if positionValid and rawPosition and state.poseOrigin
      and state.poseOrigin.position then
     local origin = state.poseOrigin.position
     local anchor = state.poseOrigin.center or fallback.eye
-    eye = clampPoseOffset({
-      x = anchor.x + (rawPosition.x - origin.x) * state.poseScale,
-      y = anchor.y + (rawPosition.y - origin.y) * state.poseScale,
-      z = anchor.z + (rawPosition.z - origin.z) * state.poseScale,
+    local function inCameraBasis(position)
+      local offset = {
+        x = position.x - origin.x,
+        y = position.y - origin.y,
+        z = position.z - origin.z,
+      }
+      if state.poseOrigin.orientation then
+        offset = quaternionRotate(quaternionConjugate(state.poseOrigin.orientation), offset)
+      end
+      return {
+        x = (baseRight.x * offset.x + baseUp.x * offset.y - baseForward.x * offset.z) * state.poseScale,
+        y = (baseRight.y * offset.x + baseUp.y * offset.y - baseForward.y * offset.z) * state.poseScale,
+        z = (baseRight.z * offset.x + baseUp.z * offset.y - baseForward.z * offset.z) * state.poseScale,
+      }
+    end
+    -- Translation and rotation must share the recentered camera basis.
+    -- Raw tracking XYZ otherwise puts IPD along depth after a 90-degree
+    -- recenter, or swaps the eyes when the game camera faces +Z.
+    local offset = inCameraBasis(rawPosition)
+    local head = inCameraBasis(state.poseOrigin.currentPosition or origin)
+    local clamped = clampPoseOffset({
+      x = anchor.x + head.x, y = anchor.y + head.y, z = anchor.z + head.z,
     }, anchor)
+    -- Clamp the head centre, not each eye independently: eye-wise clamping
+    -- collapses IPD at the lean boundary and changes apparent world scale.
+    eye = { x = clamped.x + offset.x - head.x,
+      y = clamped.y + offset.y - head.y, z = clamped.z + offset.z - head.z }
   end
 
   local focus = readVector(rawView.target)
-  local orientationDelta
-  local baseForward = normalizedVector({
-    x = fallback.focus.x - fallback.eye.x,
-    y = fallback.focus.y - fallback.eye.y,
-    z = fallback.focus.z - fallback.eye.z,
-  }, { x = 0, y = 0, z = -1 })
+  local trackedUp
   if orientationValid and orientation and state.poseOrigin
      and state.poseOrigin.orientation then
     -- Poses are local-to-reference transforms.  Form the relative rotation
@@ -437,12 +465,17 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
     -- axes, making pitch depend on which way the player faced at recenter.
     local delta = quaternionMultiply(
       quaternionConjugate(state.poseOrigin.orientation), orientation)
-    orientationDelta = delta
     local forward = trackedDirection(delta, baseForward)
+    local localUp = quaternionRotate(delta, { x = 0, y = 1, z = 0 })
+    trackedUp = {
+      x = baseRight.x * localUp.x + baseUp.x * localUp.y - baseForward.x * localUp.z,
+      y = baseRight.y * localUp.x + baseUp.y * localUp.y - baseForward.y * localUp.z,
+      z = baseRight.z * localUp.x + baseUp.z * localUp.y - baseForward.z * localUp.z,
+    }
     local distance = math.sqrt(
-      (fallback.focus.x - fallback.eye.x)^2
-      + (fallback.focus.y - fallback.eye.y)^2
-      + (fallback.focus.z - fallback.eye.z)^2)
+      (baseFocus.x - center.x)^2
+      + (baseFocus.y - center.y)^2
+      + (baseFocus.z - center.z)^2)
     focus = {
       x = eye.x + forward.x * distance,
       y = eye.y + forward.y * distance,
@@ -451,8 +484,8 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
   end
   result.eye = eye
   result.focus = focus or copyVector(fallback.focus)
-  result.baseEye = copyVector(fallback.eye)
-  result.baseFocus = copyVector(fallback.focus)
+  result.baseEye = copyVector(center)
+  result.baseFocus = copyVector(baseFocus)
   result.fov = validFov(rawView.fov) or fallback.fov
   if finiteNumber(rawView.width) and rawView.width > 0 then
     result.width = math.floor(rawView.width)
@@ -465,7 +498,11 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
   result.eyeIndex = index
   result.stereo = true
   if orientation then result.orientation = orientation end
-  if orientationDelta then result.orientationDelta = orientationDelta end
+  -- Supply the complete tracked camera directly. The reference voxel mod's
+  -- legacy orientationDelta branch removes roll, which disagrees with the
+  -- full pose submitted to OpenXR and makes the world move on head tilt.
+  result.orientationDelta = nil
+  if trackedUp then result.up = trackedUp end
   if rawView.rotation ~= nil then result.rotation = rawView.rotation end
   if pose ~= nil then result.pose = pose end
   return result
@@ -497,6 +534,7 @@ local function establishPoseOrigin(left, right, center)
     orientation = readQuaternion(right.orientation)
   end
   local origin = state.poseOrigin or {}
+  if position then origin.currentPosition = position end
   if position and not origin.position then origin.position = position end
   if orientation and not origin.orientation then origin.orientation = orientation end
   -- The game camera follows the player. Keep the physical headset offset
@@ -788,6 +826,7 @@ end
 -- position against the new game camera instead of leaving the player behind.
 function Runtime.recenter()
   state.poseOrigin = nil
+  if monoPanel then monoPanel.reset() end
   return true
 end
 
@@ -883,6 +922,18 @@ function Runtime.submit(leftCanvas, rightCanvas, options)
     -- without Canvas:newImageData() readback or a mono composition quad.
     local submitCanvases = state.bridge.submitCanvases
     if type(submitCanvases) == "function" then
+      if leftCanvas and leftCanvas == rightCanvas then
+        monoPanel = monoPanel or require("src.vr.MonoPanel")
+        local rendered, left, right = pcall(monoPanel.render, leftCanvas, state.frameViews)
+        if not rendered then
+          setError("vr mono panel", left)
+          Runtime.abortFrame()
+          return false
+        end
+        leftCanvas, rightCanvas = left, right
+      elseif monoPanel then
+        monoPanel.reset()
+      end
       local ok, result, detail, err = callFunction(submitCanvases,
         leftCanvas, rightCanvas)
       if ok and result ~= false then
@@ -1023,6 +1074,7 @@ end
 function Runtime.shutdown()
   local bridge = state.bridge
   Runtime.abortFrame()
+  if monoPanel then monoPanel.release() end
   local stop = type(bridge) == "table"
     and (bridge.shutdown or bridge.destroy) or nil
   if type(stop) == "function" then

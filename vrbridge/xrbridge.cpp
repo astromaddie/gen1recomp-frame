@@ -1626,8 +1626,12 @@ private:
         if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             return fail("OpenXR swapchain image is not a complete color framebuffer");
         }
-        glBlitFramebuffer(0, 0, static_cast<GLint>(sourceWidth),
-                          static_cast<GLint>(sourceHeight), 0, 0,
+        // LOVE 11.5 Canvas row zero is its logical TOP (Graphics::setCanvas
+        // uses an inverted projection relative to its window). OpenXR's GL
+        // swapchain origin is BOTTOM-left. Convert once at this boundary,
+        // including mono UI and resolved MSAA, just as uploadSwapchain does.
+        glBlitFramebuffer(0, static_cast<GLint>(sourceHeight),
+                          static_cast<GLint>(sourceWidth), 0, 0, 0,
                           static_cast<GLint>(destinationWidth),
                           static_cast<GLint>(destinationHeight), GL_COLOR_BUFFER_BIT,
                           (sourceWidth == destinationWidth &&
@@ -1878,11 +1882,12 @@ private:
             if (writeOK) writeOK = writeAll(header, static_cast<size_t>(headerLength));
             const size_t rowBytes = static_cast<size_t>(width) * 3u;
             for (uint32_t row = 0; writeOK && row < height; ++row) {
-                // LOVE's Canvas render target row zero corresponds to the
-                // first (top) logical row used by its image-data API. Keep
-                // that same order in the diagnostic PPM.
+                // Read the compositor image in its OpenGL bottom-left
+                // convention, then normalize to PPM's top-left row order.
+                // Do not reinterpret it as a LOVE Canvas: that masks an
+                // upside-down submission when comparing source and dump.
                 const unsigned char* source = rgb.data() +
-                    static_cast<size_t>(row) * rowBytes;
+                    static_cast<size_t>(height - 1u - row) * rowBytes;
                 writeOK = writeAll(source, rowBytes);
             }
             const int closeResult = ::close(fd);

@@ -5,8 +5,10 @@ the existing Polymatic Labs voxel VR fork to standalone Steam Frame, using a
 pinned LÖVE 11.5 runtime and SteamLinuxRuntime_4-arm64. No PC streaming is needed.
 
 The overworld uses the reference mod's tracked stereo cameras. Launcher, menus,
-dialogue and battles use a mono image submitted through a stereo projection
-layer. This first port preserves the existing camera and settings interfaces.
+dialogue and battles keep the reference UI. Flat fallback screens are rendered
+onto a shared 1.9 m screen at 2 m through each eye's projection, preserving
+aspect ratio and binocular alignment. This port preserves the existing camera
+and settings interfaces.
 Physical controller behavior, comfort, sustained performance and sleep/resume
 still require device and worn acceptance.
 
@@ -61,18 +63,25 @@ copied save can show the game's existing mod load report before Continue.
 ## Verification
 
 ARM64 native builds, Runtime/main integration tests and actual GPU Canvas copy
-tests under LÖVE/Xvfb passed. The native test checks pixel orientation/content,
-graphics-state restoration and rejection of non-Canvas userdata. An isolated
+tests under LÖVE/Xvfb passed. The corrected native test checks OpenXR's
+bottom-left image convention, graphics-state restoration, MSAA/renderbuffer
+copying and rejection of non-Canvas userdata. The original bridge fails this
+orientation regression. Camera tests cover recenter yaw, full tracked roll and
+IPD preservation; rendered mono tests cover asymmetric eye projections and
+the existing screen aspect ratio. An isolated
 copy of the user's Yellow save passed the production Continue path and rendered
 its saved Pewter City location; the original save and backup were unchanged.
 
 The native kit has also been installed and launched through Steam on Frame.
 The ROM-free probe reached focused SteamVR/OpenXR operation, used sRGB
 1728 x 1728 eye swapchains, and logged 1,588 projection submissions without a
-submission failure. Its copied left/right eye pixels exactly matched the
-source Canvases, and the wearer confirmed clear patterns in both eyes. The
+submission failure. The wearer confirmed clear patterns in both eyes. The
+old source/dump pixel comparison incorrectly interpreted raw OpenGL rows as
+top-left and did not prove compositor orientation. The
 native game restored the copied Yellow save in flat mode and completed a short
 focused VR saved-scene run with 300 projection submissions and no bridge error.
-These short runs do not establish sustained gameplay performance or comfort.
+The wearer subsequently rejected the game presentation as inverted, scaled
+and misaligned. Source corrections have passed host tests; corrected device
+captures and wearer acceptance remain required. This is an unaccepted prototype.
 Current device evidence and remaining gates are recorded in
 [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).

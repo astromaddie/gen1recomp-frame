@@ -107,14 +107,45 @@ function love.load()
   for y = 0, 11 do
     for x = 0, 15 do
       local sr, sg, sb, sa = sourceData:getPixel(x, y)
-      local tr, tg, tb, ta = targetData:getPixel(x, y)
+      -- This target stands in for an OpenXR GL swapchain, not another LOVE
+      -- Canvas. Its GL top row must contain the source's logical top row.
+      -- LOVE ImageData exposes GL row zero as logical top, so inspect the
+      -- opposite row here. Comparing identical ImageData rows hid the bug.
+      local tr, tg, tb, ta = targetData:getPixel(x, 11 - y)
       requireTest(closeColor(sr, tr) and closeColor(sg, tg)
           and closeColor(sb, tb) and closeColor(sa, ta),
         string.format("Canvas copy mismatch at %d,%d", x, y))
     end
   end
 
-  print("CANVAS_COPY_TEST_PASS: pixel orientation, content, scissor, color mask, type guard")
+  -- Exercise the same conversion after MSAA resolution, and the unreadable
+  -- renderbuffer path; both also cover scaling during the final GL blit.
+  -- The diagnostic hook permits exactly one capture per eye. Run the extra
+  -- copy variants in the ordinary no-dump invocation of this same test.
+  if not dumpDirectory then
+   for _, options in ipairs({{msaa=4,readable=true},{msaa=0,readable=false}}) do
+    local extra=love.graphics.newCanvas(16,12,{dpiscale=1,format="rgba8",
+      msaa=options.msaa,readable=options.readable})
+    local scaled=love.graphics.newCanvas(32,24,{dpiscale=1,format="rgba8"})
+    love.graphics.setCanvas(extra)
+    love.graphics.clear(0,0,1,1)
+    love.graphics.setColor(1,0,0,1)
+    love.graphics.rectangle("fill",0,0,16,6)
+    love.graphics.setCanvas()
+    love.graphics.setColor(1,1,1,1)
+    local copiedExtra, extraError=bridge.testCanvasCopy(extra,scaled)
+    requireTest(copiedExtra,"MSAA="..options.msaa.." readable="..tostring(options.readable)
+      .." scaled copy failed: "..tostring(extraError))
+    local data=scaled:newImageData()
+    local r,g,b=data:getPixel(8,20)
+    requireTest(r>0.99 and b<0.01,"scaled GL top must contain logical source top")
+    r,g,b=data:getPixel(8,3)
+    requireTest(b>0.99 and r<0.01,"scaled GL bottom must contain logical source bottom")
+    extra:release();scaled:release()
+   end
+  end
+
+  print("CANVAS_COPY_TEST_PASS: OpenXR bottom-left orientation, content, scissor, color mask, type guard")
   source:release()
   target:release()
   finished = true
@@ -126,3 +157,8 @@ function love.update()
 end
 
 function love.draw() end
+
+function love.errorhandler(message)
+  io.stderr:write(tostring(message) .. "\n")
+  return function() return 1 end
+end

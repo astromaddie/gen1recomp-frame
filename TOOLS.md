@@ -89,3 +89,33 @@ fixed path allowlist, requires the complete runtime license inventory, writes
 `PACKAGE-METADATA.json` and a package-wide `SHA256SUMS`, and rejects user game
 data. It does not copy `game/`, fetched voxel source, tests, build caches, or
 arbitrary files from the source checkout.
+
+## Presentation regressions
+
+Use the pinned builder's LuaJIT and LÖVE. Pure production-camera tests also
+read the pinned player-local voxel renderer; they do not alter it or need ROMs:
+
+```sh
+POKEPORT_XRBRIDGE=fake luajit integration/tests/presentation_test.lua \
+  integration/src/vr /path/to/DramaticShapeVoxelMod
+POKEPORT_XRBRIDGE=fake luajit integration/tests/runtime_test.lua integration/src/vr/Runtime.lua
+POKEPORT_VR_REQUIRED=1 luajit integration/tests/main_overlay_test.lua /path/to/private-local-assembly/game/main.lua
+luajit integration/tests/probe_policy_test.lua integration/probe/main.lua
+```
+
+Build a separate bridge with `-DXRBRIDGE_TESTING=ON` using the same CMake
+inputs as `build-bridge-in-container.sh`; never package that test binary.
+With `POKEPORT_XRBRIDGE` pointing to it, run `love integration/tests/canvas_copy`
+under Xvfb both without diagnostics (MSAA, unreadable and scaled copies) and
+with `POKEPORT_XR_PROBE_DUMP_DIR` set to a fresh directory (one-shot PPM
+orientation/readback-state checks). The original native copy fails the
+OpenXR-origin expectation.
+
+For the rendered mono regression, set `POKEPORT_TEST_KIT` to this checkout,
+`POKEPORT_TEST_OUTPUT` to a fresh evidence directory, and
+`POKEPORT_XR_PROBE_DUMP_DIR` to that same directory, then run
+`love integration/tests/mono_panel`. Inspect `panel-left.png`,
+`panel-right.png` and the normalized `xr-left.ppm`/`xr-right.ppm`. Different
+pixel offsets and scale in asymmetric eye images are expected: the test
+checks that both projections reconstruct the same upright physical plane.
+These host checks do not substitute for corrected Frame/wearer acceptance.

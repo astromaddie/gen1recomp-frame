@@ -9,6 +9,9 @@ the pinned static loader, sRGB eye swapchains and a projection layer. Linux eye
 submission copies the LÖVE Canvas on the GPU; steady-state Linux rendering has
 no synchronous CPU image readback. The Canvas interface uses the exact packaged
 LÖVE 11.5 ABI and validates the canonical Canvas userdata type.
+The GPU boundary reverses Canvas rows: LÖVE Canvas logical top is GL row zero,
+whereas OpenXR GL images use a bottom-left origin. Diagnostic PPMs reverse
+raw glReadPixels rows to show the compositor image truthfully as top-left.
 
 The game simulates once before drawing both eyes. The existing voxel mod derives
 each eye camera from the same frame's predicted pose/FOV. `xrWaitFrame` supplies
@@ -19,7 +22,12 @@ are bypassed while the XR clock is active. Focus/render loss freezes simulation,
 audio and input while XR events and empty frames continue.
 
 The existing launcher starts OpenXR before constructing its UI. Its mono Canvas
-is sent to both projection eyes, and native actions reuse its gamepad callbacks.
+is projected onto a shared plane, 1.9 m wide at 2 m (tall screens fit within
+1.9 m height), using each current eye pose/FOV. The plane anchors to head yaw
+and height on mono entry or recentre, preserves the original screen aspect,
+and uses projection layers only. The legacy quadScale option applies only to
+the Windows quad fallback; Linux uses this physical screen instead of scaling
+an identical texture across both eye frusta. Native actions reuse gamepad callbacks.
 The Frame controller extension is enabled and suggested only when advertised.
 Menu/short View/long View implement Start/Select/recentre. A/B and left stick/
 D-pad provide normal game input. No OS keyboard injection is used.
@@ -27,12 +35,12 @@ D-pad provide normal game input. No OS keyboard injection is used.
 | Gate | Evidence | State |
 | --- | --- | --- |
 | Native source and ABI | ARM64 bridge/runtime builds; Lua integration tests; ELF/closure/ABI receipts | Host passed |
-| GPU Canvas copy | Actual pinned LÖVE/Xvfb pixel/state/type tests | Host passed |
+| GPU Canvas copy | Baseline fails the new OpenXR-origin test; corrected pinned LÖVE/Xvfb pixels, MSAA, renderbuffer, scale/state/type tests pass | Host passed; corrected device check pending |
 | Flat game and real save | Red Pallet Town; copied Yellow Continue at Pewter City (22,19), voxel render | Host passed |
-| OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes, 1,588 logged submissions, exact copied pixels; wearer confirmed clear patterns | Device and wearer passed |
+| OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes, 1,588 logged submissions; wearer confirmed clear patterns. Old dump comparison masked GL origin error | Session operation passed; corrected image orientation pending |
 | Actual game on Frame | Copied Yellow save at Pewter City (22,19): native flat render; focused VR run with 300 submissions and no bridge error | Short run passed; settled stereo-eye capture pending |
 | Physical input and camera modes | A/B, stick, Menu, View/recentre, launcher selection and voxel Options | Pending wearer |
-| Presentation/comfort | 0/90/180 yaw, lean, readable menus, view scale, eye alignment | Pending wearer |
+| Presentation/comfort | Wearer rejected inversion, scale and alignment. Host correction tests cover 0/90/180 recenter, full roll through actual voxel matrices, IPD-preserving lean clamp and rendered mono projections | Rejected on old build; corrected wearer gate pending |
 | Audio, sustained performance, sleep/resume | Gameplay session and power-button sleep/recovery | Pending device/wearer |
 
 The ROM-free color probe submits whenever OpenXR says `shouldRender`; an
@@ -66,6 +74,21 @@ load report, so it verifies mono UI copying. A later overworld capture is still
 required to close the stereo image gate. The driver screenshot shows the voxel
 scene, and the short VR run's completion status was focused with 300 submitted
 frames, two eye dumps and no bridge error.
+
+The wearer later reported an inverted, improperly scaled and misaligned view
+after an initially good view. A later diagnostic run stopped after 234 submits,
+before its requested 250-submit eye capture. Its driver asserted missing dumps;
+the engine catches driver errors and queues quit(1), rather than directly
+entering the LÖVE error handler. This diagnostic failure does not rule out the
+independently confirmed production render defects.
+
+The corrections convert Canvas origin once at the GPU copy boundary, project
+mono fallback screens instead of stretching them, and map eye translation and
+full orientation through the same recentered game-camera basis. The Runtime
+supplies focus/up directly so the reference mod's legacy roll-stripping branch
+cannot disagree with the full pose submitted to OpenXR. Head-centre lean is
+clamped before adding eye offsets, preserving runtime IPD at the clamp boundary.
+World units remain 48 pixels/metre; no camera modes or settings UI were added.
 
 The native Steam shortcut did not propagate the devkit `-env.json` diagnostic
 values in this test. Diagnostic runs therefore used a temporary shell wrapper
