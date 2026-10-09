@@ -217,3 +217,30 @@ retain existing terrain frustum selection. It reports full-image error, actual
 shadow/reflection pass counts and source triangle counts, then verifies actor
 movement/restoration and outdoor lighting invalidate the real scene cache.
 Do not interpret software-GL host timings as Steam Frame performance.
+
+
+For the terrain/dynamic shadow split, run `love integration/tests/shadow_optimization`
+with `POKEPORT_TEST_KIT`, `POKEPORT_TEST_VOXEL` and `POKEPORT_TEST_BRIDGE` pointing to
+this kit, its private assembled DRAMALESS directory, and the newly compiled native
+bridge. It executes the actual shader and exact GPU depth-copy helper; checks
+coplanar ties, alpha/sprite classification, actor movement, fit/resolution changes,
+copy state preservation and type/target/format/alias/failure fallback. The existing
+`draw_distance` test also covers light-volume selection and off-eye casters.
+
+`integration/tests/shadow_scene_driver.lua` uses the private scene workflow above,
+with `POKEPORT_TEST_BRIDGE` for the actual color/depth copy and a fake OpenXR pose
+boundary. Both sides retain the bf5 terrain-view and reflection selection. It
+compares the unchanged combined sun pass against cold and warm split caches at
+1728² per eye, then moving player/NPCs, actual atlas animation and outdoor light/
+camera changes. Use city, Route21 visible water, a rolled Mart interior and POV.
+Every comparison freezes update/time and reports full-image exact differences,
+shadow rebuild/cache/triangle counts and reflection passes. A static interior
+without an animated atlas is reported explicitly, not counted as animation proof.
+
+The native factory regression now checks retained eye-profile lifetime, production
+`beginFrame` wait/begin/locate/update-both/query ordering, repeated frames, failed
+second-eye refresh/query, invalid gaze, raw focus/render gates and authorized
+unattended refresh. It also verifies fixed/off/missing-optional-API fallback. Run
+`vrbridge/tests/telemetry_test.cpp` for bounded nested source/shadow GPU timestamps.
+The opt-in source-eye dimensions and AA attribution cannot prove Valve FDM attachment;
+that requires the booked Frame capture/diagnostics and worn validation separately.

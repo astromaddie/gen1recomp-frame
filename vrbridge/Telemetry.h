@@ -278,11 +278,6 @@ public:
 
     bool begin(TimestampBackend& backend, const char* name, uint64_t frame,
                const char* scene) {
-        if (m_active >= 0) {
-            ++m_errors;
-            m_status = QueryStatus::Error;
-            return false;
-        }
         if (!probe(backend)) return false;
 
         size_t index = Capacity;
@@ -310,18 +305,17 @@ public:
         slot.frame = frame;
         slot.recording = true;
         backend.timestamp(slot.startQuery);
-        m_active = static_cast<int>(index);
+        m_active[m_activeCount++] = index;
         m_status = QueryStatus::Available;
         return true;
     }
 
     void end(TimestampBackend& backend) {
-        if (m_active < 0) return;
-        Slot& slot = m_slots[static_cast<size_t>(m_active)];
+        if (m_activeCount == 0) return;
+        Slot& slot = m_slots[m_active[--m_activeCount]];
         backend.timestamp(slot.endQuery);
         slot.recording = false;
         slot.pending = true;
-        m_active = -1;
     }
 
     std::vector<TimestampResult> poll(TimestampBackend& backend,
@@ -356,11 +350,7 @@ public:
     }
 
     void release(TimestampBackend& backend) {
-        if (m_active >= 0) {
-            Slot& slot = m_slots[static_cast<size_t>(m_active)];
-            slot.recording = false;
-            m_active = -1;
-        }
+        m_activeCount = 0;
         for (Slot& slot : m_slots) {
             if (slot.startQuery) backend.destroy(slot.startQuery);
             if (slot.endQuery) backend.destroy(slot.endQuery);
@@ -376,7 +366,7 @@ public:
         // The owning GL context is already gone, so its query objects have
         // been reclaimed by the driver. Drop names without issuing GL calls.
         for (Slot& slot : m_slots) slot = Slot{};
-        m_active = -1;
+        m_activeCount = 0;
         m_status = QueryStatus::Unknown;
         m_dropped = 0;
         m_errors = 0;
@@ -397,11 +387,10 @@ public:
     }
     void noteError() { ++m_errors; }
     void cancelActive() {
-        if (m_active < 0) return;
-        Slot& slot = m_slots[static_cast<size_t>(m_active)];
-        slot.recording = false;
-        m_active = -1;
-        ++m_errors;
+        while (m_activeCount > 0) {
+            m_slots[m_active[--m_activeCount]].recording = false;
+            ++m_errors;
+        }
     }
 
 private:
@@ -416,7 +405,8 @@ private:
     };
 
     std::array<Slot, Capacity> m_slots{};
-    int m_active = -1;
+    std::array<size_t, Capacity> m_active{};
+    size_t m_activeCount = 0;
     size_t m_nextPoll = 0;
     uint64_t m_dropped = 0;
     uint64_t m_errors = 0;

@@ -91,12 +91,21 @@ assert(bridge.scopeEnded)
 Telemetry.recordFrame(10, { focused = true, shouldRender = true,
   xrWaitWallNs = 8000000, xrWaitMainCpuNs = 1000000 })
 Telemetry.recordSubmit()
+local source={getDimensions=function()return 2444,2444 end}
+local resolved={getDimensions=function()return 1728,1728 end}
+Telemetry.recordSourceEye(1,source,resolved,2,2444/1728)
+Telemetry.recordShadows({terrainBuilds=1,terrainHits=2,terrainTriangles=42,dynamicTriangles=8,
+  sourceTerrainTriangles=84,sourceDynamicTriangles=12,restores=3,fallbacks=0})
 
 now.wallNs = now.wallNs + 1000000000
 now.processCpuNs = now.processCpuNs + 1500000000
 now.mainCpuNs = now.mainCpuNs + 800000000
 Telemetry.recordFrame(11, { focused = true, shouldRender = true,
-  xrWaitWallNs = 9000000, xrWaitMainCpuNs = 1000000 })
+  xrWaitWallNs = 9000000, xrWaitMainCpuNs = 1000000,
+  foveationRequested="eye",foveationApplied="eye-medium",foveationFrameAttempted=true,
+  foveationFrameUpdated=true,foveationQueryAttempted=true,foveationQueryResult=0,
+  foveationEyeValid=false,foveationEyeFlags=0,foveationCenterEye1X=0,foveationCenterEye1Y=0,
+  foveationCenterEye2X=0,foveationCenterEye2Y=0 })
 Telemetry.recordSubmit()
 
 local loadLine, sceneLine, gpuLine, clientLine
@@ -196,4 +205,8 @@ assert(forcedGpu and forcedGpu:find("force_render_mode=true")
 Telemetry.stopWindow()
 os.getenv, print = oldGetenv, oldPrint
 assert(table.concat(lines,"\n"):find("swapchain_wait_eye1",1,true),"native CPU stages missing")
+local output=table.concat(lines,"\n")
+assert(output:find("source=2444x2444 resolved=1728x1728 aa_samples=2",1,true),"actual source/resolve allocation missing")
+assert(output:find("terrainBuilds=1 terrainHits=2 terrainTriangles=42 dynamicTriangles=8",1,true),"shadow pass attribution missing")
+assert(output:find("eye_valid=false flags=0",1,true) and output:find("source_fdm_attachment=unverified",1,true),"eye validity/source attribution missing")
 print("telemetry integration tests passed")

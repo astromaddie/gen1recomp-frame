@@ -82,3 +82,9 @@
 +    -- Tracked eyes can straddle a sprite-facing boundary. Cache the actual
 +    -- caster frame choice too, so sharing never substitutes the other cheek.
 +    put(viewFacing(p))
+@@ -924,0 +928 @@
++  if ShadowMap.sceneSignature then sig = ShadowMap.sceneSignature(sig, state, atlasFor) end
+@@ -941,0 +945,3 @@
++  -- The stereo host may retain this immutable terrain/water prefix, then
++  -- restore color AND depth before the original dynamic caster sequence.
++  if ShadowMap.staticEnd then ShadowMap.staticEnd() end

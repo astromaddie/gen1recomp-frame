@@ -78,6 +78,22 @@ function love.load()
   assert(retained==objectCount,"whole tall boundary object must survive")
   local original=terrain:getVertexMap();assert(#original==#indices)
   for i,v in ipairs(indices)do assert(original[i]==v,"source/shadow indices mutated")end
+  -- The shadow view is independent of eye visibility. A light volume around
+  -- the far object must retain it even while both tracked eyes look elsewhere.
+  local light=Mat.mul(Mat.scale(1/40,1/80,1/40),Mat.translate(-432,-32,-432))
+  local selected=Window.shadowSelection(terrain,nil,light)
+  assert(selected and selected~=terrain,"actual light volume should select only its chunks")
+  local shadowIndices=selected:getVertexMap()
+  local farCount=0
+  for _,i in ipairs(shadowIndices) do if i>#verts-4 then farCount=farCount+1 end end
+  assert(farCount==6,"off-eye-frustum caster inside light volume must survive")
+  assert(Window.shadowSelection(actor,nil,light)==actor,"unknown actor bounds fail open")
+  assert(Window.shadowSelection(terrain,Mat.translate(5000,0,0),light)==nil,"outside light volume must reject")
+  local all=Mat.scale(1/4096,1/4096,1/4096)
+  assert(Window.shadowSelection(terrain,nil,all)==terrain,"light fit changes must invalidate selection")
+  assert(Window.shadowSelection(terrain,{},light)==terrain,"unknown model must fail open")
+  local bad=Mat.identity();bad[1]=0/0
+  assert(Window.shadowSelection(terrain,nil,bad)==terrain,"invalid clip matrix must fail open")
   modules.Voxel3D.camera=nil
   frame();assert(draws[1][1]==terrain,"mono fallback must never reuse XR frusta")
   monoCamera=true;frame()

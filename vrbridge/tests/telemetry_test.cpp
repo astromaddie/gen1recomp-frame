@@ -127,6 +127,22 @@ int main() {
     assert(pollRing.pending() == 0 && pollBackend.resultReads == 8);
     pollRing.release(pollBackend);
 
+    vrtelemetry::TimestampRing<2> nested;
+    FakeTimestampBackend nestedBackend;
+    assert(nested.begin(nestedBackend,"source_scene_eye1",11,"city"));
+    assert(nested.begin(nestedBackend,"shadow_terrain",11,"city"));
+    assert(!nested.begin(nestedBackend,"overflow",11,"city"));
+    nested.end(nestedBackend);nested.end(nestedBackend);
+    for (const auto& item : nestedBackend.values) nestedBackend.ready.insert(item.first);
+    auto nestedResult=nested.poll(nestedBackend);
+    assert(nestedResult.size()==2 && nestedResult[0].durationNs==3 && nestedResult[1].durationNs==1);
+    assert(nested.errors()==0 && nested.dropped()==1);
+    assert(nested.begin(nestedBackend,"source_scene_eye2",12,"city"));
+    assert(nested.begin(nestedBackend,"shadow_dynamic",12,"city"));
+    nested.cancelActive();assert(nested.errors()==2 && nested.pending()==0);
+    assert(nested.begin(nestedBackend,"after-cancel",13,"city"));nested.end(nestedBackend);
+    nested.release(nestedBackend);
+
     FakeTimestampBackend errorBackend;
     errorBackend.resultSucceeds = false;
     Ring errorRing;

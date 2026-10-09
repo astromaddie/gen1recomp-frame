@@ -845,6 +845,15 @@ local function ensureStarted(width, height)
   return state.started
 end
 
+-- The shadow cache is optional and keeps the original renderer on bridges
+-- without an exact same-format GPU color/depth copy.
+function Runtime.restoreShadowCanvas(color,depth,target)
+  local copy=state.bridge and state.bridge.restoreShadowCanvas
+  if not state.bridgeActive or type(copy)~="function" then return false,"native depth copy unavailable" end
+  local ok,result,detail=pcall(copy,color,depth,target)
+  return ok and result==true,ok and detail or result
+end
+
 function Runtime.beginFrame(width, height)
   if state.frameOpen then Runtime.abortFrame() end
   if not ensureStarted(width, height) then return false end
@@ -1184,6 +1193,8 @@ function Runtime.shutdown()
   if monoPanel then monoPanel.release() end
   local culling = package.loaded["src.vr.DrawDistance"]
   if culling then culling.release() end
+  local shadows = package.loaded["src.vr.ShadowOptimization"]
+  if shadows then shadows.release() end
   local stop = type(bridge) == "table"
     and (bridge.shutdown or bridge.destroy) or nil
   if type(stop) == "function" then

@@ -54,7 +54,12 @@ local function eyePass(V,ctx,view,slot,w,h)
       ctx.drawFx(function(x,y) return graphics.project(x,0,y) end,ctx.scale*aa.factor())
       graphics.endOverlay()
     end
-    return aa.resolve(canvas,w,h,slot)
+    local resolved=aa.resolve(canvas,w,h,slot)
+    local telemetry=package.loaded["src.vr.Telemetry"]
+    if telemetry and telemetry.isEnabled() then
+      telemetry.recordSourceEye(slot=="native-xr-left" and 1 or 2,canvas,resolved,aa.samples(),aa.factor())
+    end
+    return resolved
   end,debug.traceback)
   graphics.beginScene,graphics.camera=oldBegin,oldCamera
   fp.adoptTrackedEye(nil)
@@ -78,11 +83,15 @@ function Stereo.drawWorld(V,ctx)
     if not glint then glint=step(...) end
     return glint
   end
+  local shadows=require("src.vr.ShadowOptimization")
+  shadows.begin(V)
   local ok,a,b=xpcall(function()
     local a=eyePass(V,ctx,left,"native-xr-left",w,h)
     local b=eyePass(V,ctx,right,"native-xr-right",w,h)
     return a,b
   end,debug.traceback)
+  shadows.finish()
+  if ok then require("src.vr.Telemetry").recordShadows(shadows.status()) end
   scene.glintStep=step
   if not ok then error(a,0) end
   if not (a and b) then return V.require("VoxelLoadingVeil").get(ctx.width,ctx.height) end

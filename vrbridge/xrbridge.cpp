@@ -507,6 +507,7 @@ public:
     }
 
     bool beginFrame() {
+        resetFoveationFrame();
         if (!m_initialized) {
             return failIfEmpty("xrbridge is not initialized");
         }
@@ -603,6 +604,7 @@ public:
             }
         }
 #endif
+        refreshEyeFoveation();
         ++m_beginCount;
         m_lastError.clear();
         return true;
@@ -852,6 +854,7 @@ public:
 
     bool abortFrame() {
         endEmptyFrame();
+        resetFoveationFrame();
         return true;
     }
 
@@ -872,6 +875,7 @@ public:
 
             switch (event.type) {
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
+                resetFoveationFrame();
                 m_instanceLossPending = true;
                 m_quitRequested = true;
                 break;
@@ -879,6 +883,7 @@ public:
                 const auto* stateEvent =
                     reinterpret_cast<const XrEventDataSessionStateChanged*>(&event);
                 m_sessionState = stateEvent->state;
+                if (m_sessionState != XR_SESSION_STATE_FOCUSED) resetFoveationFrame();
                 switch (m_sessionState) {
                 case XR_SESSION_STATE_READY:
                     if (!m_sessionRunning) {
@@ -938,6 +943,14 @@ public:
     const std::string& foveationRequested() const { return m_foveationRequested; }
     const std::string& foveationApplied() const { return m_foveationApplied; }
     const std::string& foveationMessage() const { return m_foveationMessage; }
+    bool foveationFrameAttempted() const { return m_foveationFrameAttempted; }
+    bool foveationFrameUpdated() const { return m_foveationFrameUpdated; }
+    bool foveationQueryAttempted() const { return m_foveationQueryAttempted; }
+    bool foveationEyeValid() const { return m_foveationEyeValid; }
+    XrResult foveationUpdateResult(size_t eye) const { return m_foveationUpdateResults[eye]; }
+    XrResult foveationQueryResult() const { return m_foveationQueryResult; }
+    XrTime foveationDisplayTime() const { return m_foveationDisplayTime; }
+    const XrFoveationEyeTrackedStateMETA& foveationEyeState() const { return m_foveationEyeState; }
     const std::string& lastError() const { return m_lastError; }
     bool focused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     bool shouldRender() const { return m_frameState.shouldRender == XR_TRUE; }
@@ -1129,7 +1142,8 @@ public:
 
     void pollTelemetryGpu() {
         if (!m_telemetryEnabled || !sameCurrentContext()) return;
-        // Four scopes may be issued per submitted frame. Check a bounded
+        // Source eyes, nested shadow passes and copies issue up to eight
+        // scopes per submitted frame. Check a bounded
         // number of pending slots every frame so the fixed ring does not fill
         // during the one-second DRM/sysfs sampling interval.
         auto ready = m_timestampRing.poll(m_timestampBackend, 16);
@@ -1320,6 +1334,74 @@ private:
     }
 
 public:
+    // Exact color + depth restore for the stereo terrain shadow cache. The
+    // caller has bound the original destination and flushed LOVE's batches.
+    bool restoreShadowCanvas(love::graphics::Canvas* color,
+                             love::graphics::Canvas* depth,
+                             love::graphics::Canvas* target,
+                             uint32_t width, uint32_t height) {
+        if (!m_glxContext && !captureCurrentContext()) return false;
+        if (!sameCurrentContext()) return fail("shadow restore requires the captured GLX context");
+        if (color == target || color == depth || depth == target)
+            return fail("shadow restore canvases must not alias");
+        if (color->getMSAA() > 1 || depth->getMSAA() > 1 || target->getMSAA() > 1)
+            return fail("shadow restore requires non-MSAA canvases");
+        GLint texture = 0, formats[3]{};
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+        love::graphics::Canvas* canvases[] = {color, depth, target};
+        for (int i = 0; i < 3; ++i) {
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(canvases[i]->getRenderTargetHandle()));
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &formats[i]);
+        }
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(texture));
+        if (formats[0] != formats[2] ||
+            (formats[1] != GL_DEPTH_COMPONENT24 && formats[1] != GL_DEPTH_COMPONENT16))
+            return fail("shadow restore requires matching color and supported depth formats");
+        GLint read = 0, draw = 0, targetName = 0, targetType = 0, depthBits = 0, depthType = 0, depthName = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+        if (!draw) return fail("shadow restore requires a bound destination Canvas");
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &targetName);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &targetType);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &depthType);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &depthName);
+        if (depthType == GL_TEXTURE && depthName == static_cast<GLint>(depth->getRenderTargetHandle()))
+            return fail("shadow restore depth attachments must not alias");
+        const GLint expectedBits = formats[1] == GL_DEPTH_COMPONENT24 ? 24 : 16;
+        if (targetType != GL_TEXTURE || targetName != static_cast<GLint>(target->getRenderTargetHandle()) ||
+            depthBits != expectedBits || glGetError() != GL_NO_ERROR)
+            return fail("shadow restore destination or depth precision does not match");
+        const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+        const GLboolean srgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+        if (!m_shadowReadFramebuffer) glGenFramebuffers(1, &m_shadowReadFramebuffer);
+        if (!m_shadowReadFramebuffer) return fail("shadow restore framebuffer allocation failed");
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_shadowReadFramebuffer);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                              static_cast<GLuint>(color->getRenderTargetHandle()), 0);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                              static_cast<GLuint>(depth->getRenderTargetHandle()), 0);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        bool copied = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        if (copied) {
+            glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB);
+            // Same canvas convention and dimensions: no flip, scaling, shader,
+            // packed-depth conversion or CPU transfer. Preserve lequal ties.
+            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
+                              GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            copied = glGetError() == GL_NO_ERROR;
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(read));
+        if (scissor) glEnable(GL_SCISSOR_TEST);
+        if (srgb) glEnable(GL_FRAMEBUFFER_SRGB);
+        return copied || fail("shadow color/depth restore failed");
+    }
+
     bool canvasFromLua(lua_State* L, int index, love::graphics::Canvas** canvas,
                        uint32_t* width, uint32_t* height, bool* readable) {
         if (!canvasType(L)) return false;
@@ -1472,6 +1554,7 @@ private:
 
     template <typename Function>
     bool loadInstance(Function& function, const char* name) {
+        function = nullptr;
         PFN_xrVoidFunction raw = nullptr;
         const XrResult result = m_getInstanceProcAddr(m_instance, name, &raw);
         if (XR_FAILED(result) || !raw) {
@@ -1918,6 +2001,7 @@ private:
         m_foveationRequested = value ? lowerAscii(value) : "eye";
         m_foveationApplied = "none";
         m_foveationMessage.clear();
+        resetFoveationFrame();
         if (m_foveationRequested != "eye" && m_foveationRequested != "fixed" &&
             m_foveationRequested != "off") {
             m_foveationMessage = "invalid POKEPORT_XR_FOVEATION; expected eye, fixed or off";
@@ -1945,6 +2029,7 @@ private:
 
     template<typename Function>
     bool optionalFoveationFunction(Function& function, const char* name) {
+        function = nullptr;
         PFN_xrVoidFunction raw = nullptr;
         const XrResult result = m_getInstanceProcAddr(m_instance, name, &raw);
         if (XR_FAILED(result) || !raw) {
@@ -1961,19 +2046,68 @@ private:
             !optionalFoveationFunction(m_destroyFoveationProfile, "xrDestroyFoveationProfileFB") ||
             !optionalFoveationFunction(m_updateSwapchain, "xrUpdateSwapchainFB"))
             m_foveationEnabled = false;
+        if (m_foveationEnabled && m_eyeFoveationEnabled &&
+            !optionalFoveationFunction(m_getFoveationEyeTrackedState, "xrGetFoveationEyeTrackedStateMETA"))
+            m_eyeFoveationEnabled = false; // Existing fixed profile fallback.
+    }
+
+    void resetFoveationFrame() {
+        m_foveationFrameAttempted = m_foveationFrameUpdated = m_foveationQueryAttempted = false;
+        m_foveationEyeValid = false;
+        m_foveationDisplayTime = 0;
+        m_foveationUpdateResults = {XR_SUCCESS, XR_SUCCESS};
+        m_foveationQueryResult = XR_SUCCESS;
+        m_foveationEyeState = {XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META};
+    }
+
+    void refreshEyeFoveation() {
+        resetFoveationFrame();
+        bool eligible = focused() && m_frameState.shouldRender == XR_TRUE;
+#if defined(__linux__)
+        // The existing bounded off-head authorization may exercise the API,
+        // but it never fabricates a valid eye flag or gaze center.
+        eligible = eligible || forcedRenderThisFrame();
+#endif
+        if (m_foveationApplied != "eye-medium" || !m_foveationProfile ||
+            !m_updateSwapchain || !m_getFoveationEyeTrackedState || !eligible || !m_frameActive) return;
+        m_foveationFrameAttempted = true;
+        m_foveationDisplayTime = m_frameState.predictedDisplayTime;
+        XrSwapchainStateFoveationFB profile{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
+        profile.profile = m_foveationProfile;
+        for (size_t i = 0; i < m_swapchains.size(); ++i)
+            m_foveationUpdateResults[i] = m_updateSwapchain(m_swapchains[i].handle,
+                reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&profile));
+        m_foveationFrameUpdated = m_foveationUpdateResults[0] == XR_SUCCESS &&
+                                  m_foveationUpdateResults[1] == XR_SUCCESS;
+        if (!m_foveationFrameUpdated) return; // Never claim a partial refresh.
+        // Khronos recommends update immediately before the query: request a
+        // new pattern/capture timing BEFORE either expensive source-eye draw.
+        m_foveationQueryAttempted = true;
+        XrFoveationEyeTrackedStateMETA state{XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META};
+        m_foveationQueryResult = m_getFoveationEyeTrackedState(m_session, &state);
+        if (m_foveationQueryResult != XR_SUCCESS) return;
+        if (!(state.flags & XR_FOVEATION_EYE_TRACKED_STATE_VALID_BIT_META)) return;
+        for (const auto& center : state.foveationCenter)
+            if (!std::isfinite(center.x) || !std::isfinite(center.y) ||
+                std::abs(center.x) > 1.0f || std::abs(center.y) > 1.0f) return;
+        m_foveationEyeState = state;
+        m_foveationEyeValid = true;
     }
 
     void releaseFoveationProfile() {
         if (m_foveationProfile && m_destroyFoveationProfile)
             (void)m_destroyFoveationProfile(m_foveationProfile);
         m_foveationProfile = XR_NULL_HANDLE;
+        resetFoveationFrame();
     }
 
     bool createFoveationProfile() {
         if (!m_foveationEnabled) return false;
         bool eye = m_eyeFoveationEnabled && m_eyeFoveationSupported;
-        if (m_foveationRequested == "eye" && !eye)
-            m_foveationMessage = "eye-tracked foveation unsupported; requesting fixed fallback";
+        if (m_foveationRequested == "eye" && !eye) {
+            if (!m_foveationMessage.empty()) m_foveationMessage += "; ";
+            m_foveationMessage += "eye-tracked foveation unsupported; requesting fixed fallback";
+        }
         for (;;) {
             XrFoveationEyeTrackedProfileCreateInfoMETA eyeInfo{
                 XR_TYPE_FOVEATION_EYE_TRACKED_PROFILE_CREATE_INFO_META};
@@ -2003,6 +2137,7 @@ private:
             swapchain.handle = XR_NULL_HANDLE;
             swapchain.images.clear();
         }
+        releaseFoveationProfile(); // No swapchain can refer to it now.
     }
 
     bool fallbackSwapchains(const char* operation, XrResult result) {
@@ -2115,7 +2250,9 @@ private:
             }
         }
         if (foveated) m_foveationApplied = m_foveationProfileMode;
-        releaseFoveationProfile(); // Parameters are retained by the swapchains.
+        // Fixed parameters are retained by the swapchains. Eye mode needs a
+        // live profile for the recommended before-render update/query cadence.
+        if (m_foveationApplied != "eye-medium") releaseFoveationProfile();
         return true;
     }
 
@@ -2905,10 +3042,11 @@ private:
 #else
         if (m_glxContext && glXGetCurrentContext() == m_glxContext) {
             const GLuint framebuffers[] = {m_copyReadFramebuffer,
-                m_copyDrawFramebuffer, m_copyResolveFramebuffer};
-            glDeleteFramebuffers(3, framebuffers);
+                m_copyDrawFramebuffer, m_copyResolveFramebuffer, m_shadowReadFramebuffer};
+            glDeleteFramebuffers(4, framebuffers);
             if (m_resolveTexture) glDeleteTextures(1, &m_resolveTexture);
         }
+        m_shadowReadFramebuffer = 0;
         m_copyReadFramebuffer = 0;
         m_copyDrawFramebuffer = 0;
         m_copyResolveFramebuffer = 0;
@@ -2937,6 +3075,13 @@ private:
     std::string m_foveationApplied = "none";
     std::string m_foveationProfileMode;
     std::string m_foveationMessage;
+    bool m_foveationFrameAttempted = false, m_foveationFrameUpdated = false;
+    bool m_foveationQueryAttempted = false, m_foveationEyeValid = false;
+    XrTime m_foveationDisplayTime = 0;
+    std::array<XrResult, 2> m_foveationUpdateResults{XR_SUCCESS, XR_SUCCESS};
+    XrResult m_foveationQueryResult = XR_SUCCESS;
+    XrFoveationEyeTrackedStateMETA m_foveationEyeState{XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META};
+    PFN_xrGetFoveationEyeTrackedStateMETA m_getFoveationEyeTrackedState = nullptr;
     XrFoveationProfileFB m_foveationProfile = XR_NULL_HANDLE;
     PFN_xrCreateFoveationProfileFB m_createFoveationProfile = nullptr;
     PFN_xrDestroyFoveationProfileFB m_destroyFoveationProfile = nullptr;
@@ -2952,6 +3097,7 @@ private:
     GLXContext m_glxContext = nullptr;
     GLXFBConfig m_glxFBConfig = nullptr;
     uint32_t m_visualId = 0;
+    GLuint m_shadowReadFramebuffer = 0;
     GLuint m_copyReadFramebuffer = 0;
     GLuint m_copyDrawFramebuffer = 0;
     GLuint m_copyResolveFramebuffer = 0;
@@ -3337,6 +3483,24 @@ static int l_submit(lua_State* L) {
 #if defined(__linux__)
 static bool flushLoveBatch(lua_State* L);
 
+static int l_restoreShadowCanvas(lua_State* L) {
+    try {
+        love::graphics::Canvas* canvases[3]{};
+        uint32_t widths[3]{}, heights[3]{};
+        bool readable[3]{};
+        for (int i = 0; i < 3; ++i) {
+            if (!g_bridge.canvasFromLua(L, i + 1, &canvases[i], &widths[i], &heights[i], &readable[i]))
+                return pushFailure(L, g_bridge.lastError());
+            if (!readable[i] || widths[i] != widths[0] || heights[i] != heights[0])
+                return pushFailure(L, "shadow restore requires equally sized readable canvases");
+        }
+        if (!flushLoveBatch(L)) return pushFailure(L, "shadow restore could not flush LOVE batches");
+        if (!g_bridge.restoreShadowCanvas(canvases[0], canvases[1], canvases[2], widths[0], heights[0]))
+            return pushFailure(L, g_bridge.lastError());
+        lua_pushboolean(L, 1);return 1;
+    } catch (...) { return pushFailure(L, "shadow restore allocation failed"); }
+}
+
 static int l_submitCanvases(lua_State* L) {
     try {
         love::graphics::Canvas* left = nullptr;
@@ -3467,6 +3631,20 @@ static int l_pushStatus(lua_State* L) {
         setStringField(L, table, "foveationApplied", g_bridge.foveationApplied());
         setStringField(L, table, "foveationMessage", g_bridge.foveationMessage());
         setStringField(L, table, "foveationSourceShading", "unverified-runtime-injection");
+        setBoolField(L, table, "foveationFrameAttempted", g_bridge.foveationFrameAttempted());
+        setBoolField(L, table, "foveationFrameUpdated", g_bridge.foveationFrameUpdated());
+        setBoolField(L, table, "foveationQueryAttempted", g_bridge.foveationQueryAttempted());
+        setBoolField(L, table, "foveationEyeValid", g_bridge.foveationEyeValid());
+        setNumberField(L, table, "foveationDisplayTime", g_bridge.foveationDisplayTime());
+        setNumberField(L, table, "foveationUpdateEye1Result", g_bridge.foveationUpdateResult(0));
+        setNumberField(L, table, "foveationUpdateEye2Result", g_bridge.foveationUpdateResult(1));
+        setNumberField(L, table, "foveationQueryResult", g_bridge.foveationQueryResult());
+        const auto& foveationEye = g_bridge.foveationEyeState();
+        setNumberField(L, table, "foveationEyeFlags", foveationEye.flags);
+        setNumberField(L, table, "foveationCenterEye1X", foveationEye.foveationCenter[0].x);
+        setNumberField(L, table, "foveationCenterEye1Y", foveationEye.foveationCenter[0].y);
+        setNumberField(L, table, "foveationCenterEye2X", foveationEye.foveationCenter[1].x);
+        setNumberField(L, table, "foveationCenterEye2Y", foveationEye.foveationCenter[1].y);
         setBoolField(L, table, "focused", g_bridge.focused());
         setBoolField(L, table, "shouldRender", g_bridge.shouldRender());
 #if defined(__linux__)
@@ -3841,6 +4019,7 @@ extern "C" __attribute__((visibility("default"))) int luaopen_xrbridge(lua_State
         {"submitQuad", l_submitQuad},
 #if defined(__linux__)
         {"submitCanvases", l_submitCanvases},
+        {"restoreShadowCanvas", l_restoreShadowCanvas},
         {"telemetryClock", l_telemetryClock},
         {"telemetryContext", l_telemetryContext},
         {"telemetrySample", l_telemetrySample},

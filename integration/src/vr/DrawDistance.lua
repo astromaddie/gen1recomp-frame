@@ -1,6 +1,7 @@
 -- Conservative stereo-frustum selection for immutable pinned map meshes.
 -- No distance/viewport cutoff: every chunk visible to EITHER eye is retained.
--- Actors and full shadow casters remain untouched. Selected meshes share the
+-- Actors remain untouched. Shadow selection uses the light's own clip volume.
+-- Selected meshes share the
 -- original vertex buffers and preserve the original triangle order.
 local Culling = {}
 local ffi = require("ffi")
@@ -47,6 +48,7 @@ local function prepare(record)
 end
 local function release(record)
   if record.selected then record.selected:release() end
+  if record.shadowSelected then record.shadowSelected:release() end
 end
 local function register(mesh,visibilityOnly)
   if not mesh then return end
@@ -229,6 +231,61 @@ function Culling.begin(lib)
   end
 end
 function Culling.status()return metrics end
+-- Shadow vertices are uncurved and receive no camera depth pull. Test the
+-- original bounds against the actual light/model matrix, never either eye.
+-- The wider legacy GL z range is conservative on both LOVE 11 and 12.
+function Culling.shadowSelection(mesh,model,clip)
+  local record=cache[mesh]
+  if not record or not record.ready or type(clip)~="table" or (model and type(model)~="table") then return mesh,record and record.total,record and record.total end
+  local m={}
+  for row=0,3 do for col=1,4 do
+    local v=0
+    for k=1,4 do
+      local a=clip[row*4+k]
+      local b=k==col and 1 or 0
+      if model then b=model[(k-1)*4+col] end
+      if type(a)~="number" or type(b)~="number" then return mesh,record.total,record.total end
+      v=v+a*b
+    end
+    if v~=v or math.abs(v)==math.huge then return mesh,record and record.total,record and record.total end
+    m[row*4+col]=v
+  end end
+  local planes={}
+  for axis=0,2 do for _,sign in ipairs({-1,1}) do
+    local p={};for j=1,4 do p[j]=m[12+j]+sign*m[axis*4+j] end
+    planes[#planes+1]=p
+  end end
+  local changed=false
+  for _,g in ipairs(record.groups) do
+    local keep=true
+    for _,p in ipairs(planes) do
+      local d=p[1]*(p[1]>=0 and g.x1 or g.x0)+p[2]*(p[2]>=0 and g.y1 or g.y0)
+        +p[3]*(p[3]>=0 and g.z1 or g.z0)+p[4]
+      if d < -0.0001 then keep=false;break end
+    end
+    if keep~=g.shadowKeep then changed=true;g.shadowKeep=keep end
+  end
+  if changed then
+    local n=0
+    for _,r in ipairs(record.ranges) do if r[3].shadowKeep then n=n+r[2]-r[1]+1 end end
+    record.shadowCount=n
+    if n>0 and n<record.total then
+      if not record.shadowSelected then
+        local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},mesh:getVertexCount(),"triangles","dynamic")
+        selected:setAttributeEnabled("CullingUnused",false)
+        for _,a in ipairs(mesh:getVertexFormat()) do selected:attachAttribute(a[1],mesh) end
+        record.shadowSelected=selected
+      end
+      local data=love.data.newByteData(n*4);local out=ffi.cast("uint32_t*",data:getFFIPointer());local index=0
+      for _,r in ipairs(record.ranges) do if r[3].shadowKeep then
+        for j=r[1],r[2] do out[index]=(record.indices and record.indices[j] or j)-1;index=index+1 end
+      end end
+      record.shadowSelected:setVertexMap(data,"uint32");data:release()
+    end
+  end
+  if record.shadowCount==0 then return nil,record.total,0 end
+  return record.shadowCount==record.total and mesh or record.shadowSelected,record.total,record.shadowCount
+end
 function Culling.release()
   Culling.finish();for _,record in pairs(cache) do release(record) end;cache={}
 end

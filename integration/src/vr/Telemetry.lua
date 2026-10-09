@@ -177,10 +177,38 @@ function Telemetry.endGpuScope(opened)
   pcall(bridge.gpuScopeEnd)
 end
 
+-- Source allocation attribution is opt-in. GPU scope names already carry
+-- the current frame and actual VoxelScene call order (GamePresentation).
+function Telemetry.recordSourceEye(eye,source,resolved,samples,factor)
+  if not enabled or not state.armed or not state.measurementActive or not source or not resolved then return end
+  local bucket=bucketFor(state.scene);bucket.sourceEyes=bucket.sourceEyes or {}
+  local w,h=source:getDimensions();local rw,rh=resolved:getDimensions()
+  local record=bucket.sourceEyes[eye]
+  if not record or record.width~=w or record.height~=h or record.resolvedWidth~=rw
+    or record.resolvedHeight~=rh or record.samples~=samples or record.factor~=factor then
+    record={width=w,height=h,resolvedWidth=rw,resolvedHeight=rh,samples=samples,factor=factor,firstFrame=state.frame}
+    bucket.sourceEyes[eye]=record
+    print("[vr-source-eye]","scene="..state.scene,"frame="..state.frame,"eye="..eye,
+      "source="..w.."x"..h,"resolved="..rw.."x"..rh,"aa_samples="..samples,"aa_factor="..factor,
+      "source_fdm_attachment=unverified")
+  end
+  record.lastFrame=state.frame
+end
+
+local shadowFields={"terrainBuilds","terrainHits","terrainTriangles","dynamicTriangles",
+  "sourceTerrainTriangles","sourceDynamicTriangles","restores","fallbacks"}
+function Telemetry.recordShadows(status)
+  if not enabled or not state.armed or not state.measurementActive or not status then return end
+  local bucket=bucketFor(state.scene);bucket.shadows=bucket.shadows or {}
+  for _,key in ipairs(shadowFields) do bucket.shadows[key]=(bucket.shadows[key] or 0)+safeNumber(status[key]) end
+  bucket.shadowFallback=status.lastFallback or bucket.shadowFallback
+end
+
 function Telemetry.recordFrame(frame, status)
   if not enabled then return end
   status = type(status) == "table" and status or {}
   state.frame = safeNumber(frame)
+  state.foveation = status
   state.focused = status.focused == true
   state.unattendedMode = status.unattendedMode == true
     or status.unattended == true
@@ -288,6 +316,16 @@ local function printSceneBuckets(loadSample, windowScene)
         stages[#stages + 1] = name .. "{" .. stageSummary(values) .. "}"
       end
       table.sort(stages)
+      if bucket.shadows then
+        local values={}
+        for _,key in ipairs(shadowFields) do values[#values+1]=key.."="..bucket.shadows[key] end
+        print("[vr-shadow-work]","scene="..scene,table.concat(values," "),"fallback="..tostring(bucket.shadowFallback or "none"))
+      end
+      for eye,source in pairs(bucket.sourceEyes or {}) do
+        print("[vr-source-eye]","scene="..scene,"eye="..eye,"frame="..source.firstFrame.."-"..source.lastFrame,
+          "source="..source.width.."x"..source.height,"resolved="..source.resolvedWidth.."x"..source.resolvedHeight,
+          "aa_samples="..source.samples,"aa_factor="..source.factor,"source_fdm_attachment=unverified")
+      end
       print("[vr-telemetry]", "scene=" .. scene,
         "mode=" .. mode,
         "frame=" .. tostring(bucket.firstFrame or state.firstFrame) .. "-" .. tostring(bucket.lastFrame or state.frame),
@@ -385,6 +423,20 @@ function Telemetry.sample()
   end
   if (sample.cpuStagesDropped or 0) > 0 then
     print("[vr-telemetry]", "cpu_stages_dropped=" .. tostring(sample.cpuStagesDropped))
+  end
+  local f=state.foveation
+  if f and f.foveationRequested then
+    print("[vr-foveation-frame]","frame="..state.frame,"scene="..state.scene,
+      "requested="..tostring(f.foveationRequested),"applied="..tostring(f.foveationApplied),
+      "attempted="..tostring(f.foveationFrameAttempted),"updated="..tostring(f.foveationFrameUpdated),
+      "update_eye1="..tostring(f.foveationUpdateEye1Result),"update_eye2="..tostring(f.foveationUpdateEye2Result),
+      "query_attempted="..tostring(f.foveationQueryAttempted),"query_result="..tostring(f.foveationQueryResult),
+      "eye_valid="..tostring(f.foveationEyeValid),"flags="..tostring(f.foveationEyeFlags),
+      "eye1_ndc="..tostring(f.foveationCenterEye1X)..","..tostring(f.foveationCenterEye1Y),
+      "eye2_ndc="..tostring(f.foveationCenterEye2X)..","..tostring(f.foveationCenterEye2Y),
+      "display_time="..tostring(f.foveationDisplayTime),"raw_focused="..tostring(f.focused),
+      "raw_should_render="..tostring(f.shouldRender),"forced="..tostring(f.forcedRender),
+      "source_fdm_attachment=unverified")
   end
   local stableScene = state.sceneChangesSinceSample == 0
       and not state.nonRenderableSinceSample and state.measurementActive

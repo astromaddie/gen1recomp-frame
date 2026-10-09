@@ -281,6 +281,39 @@ Normal play must use `tools/LAUNCH-STEAM-FRAME.sh` with no test driver or dump
 settings. The devkit's empty `env` argument does not clear an old environment
 file; clear this title's file explicitly when restoring normal play.
 
+### Terrain shadow retention and light-space selection
+
+Native stereo retains the terrain/water prefix of the sun pass in a color canvas
+and matching depth canvas. Its key uses the exact fitted light matrix, shadow
+resolution, immutable meshes, atlas texture identities, and model transforms.
+Flowers, authored figure cards and walkers remain in their original dynamic order,
+including their original blue-channel caster classification and per-eye facing.
+Animated atlas/flower identities also invalidate the combined scene signature.
+
+The cache restores both color and depth through `xrbridge.restoreShadowCanvas`.
+It uses a same-size nearest GPU framebuffer blit, with no CPU readback or depth
+conversion. Shader-based depth restoration was rejected: the real overlap probe
+found changed coplanar tie winners despite identical packed RG depth. The helper
+checks Canvas types, formats, dimensions, aliasing, current target and matching
+depth precision, preserves GL bindings/scissor/sRGB state, and replays the original
+terrain prefix on an unsupported or failed copy. The cache adds one color/depth
+pair at the original fitted resolution; it never reduces shadow or eye resolution.
+
+Prepared immutable chunk bounds are tested against `ShadowMap.clipVP * model`,
+using all six conservative legacy GL clip planes. Shadow vertices are uncurved and
+have no eye-camera pull. Off-camera casters inside the light volume survive;
+unknown/preparing meshes and invalid transforms fail open. Separate index buffers
+retain original triangle order and keep source meshes and eye selections intact.
+`POKEPORT_VR_SHADOW_OPTIMIZATION=off` selects the unchanged combined sun pass for
+comparison. These changes are scoped to the native stereo call; flat mode retains
+its original path.
+
+`shadow_scene_driver.lua` compares complete 1728² stereo images within one update,
+including cold/warm caches, player/NPC movement, real atlas animation, sunlight and
+fitted-camera changes. The actual packed-shadow/depth overlap probe and copy
+failure/state/type/format/alias cases live in `shadow_optimization`. Host triangle
+and pass counts are work evidence, not Frame timing or worn acceptance.
+
 ### Runtime foveation negotiation (effectiveness awaiting device proof)
 
 The Linux bridge requests a medium `XR_FB_foveation_configuration` profile when
@@ -289,8 +322,9 @@ The Linux bridge requests a medium `XR_FB_foveation_configuration` profile when
 available, checks the system property, and chains its eye-tracked profile request.
 `fixed` requests medium fixed foveation; `off` provides a comparable full-rate
 control. Rejected eye profiles fall back to fixed; rejected swapchain creation or
-updates recreate **both** eyes without foveation. Profile handles are destroyed
-once the runtime has copied their parameters, or on teardown after failure.
+initial updates recreate **both** eyes without foveation. Fixed profile handles
+are destroyed once their parameters are copied; eye profiles remain live for
+per-frame refresh and are destroyed after the swapchains on teardown.
 Native recommended eye dimensions are unchanged.
 
 The OpenGL swapchain foveation create flags are zero. This is a legal generic
@@ -300,9 +334,22 @@ flags through an OpenGL binding. Frame's current Zink GL inventory has no
 maps into underlying matching-size render passes. This route needs actual
 `FDM_DEBUG` evidence of attachment to LÖVE's **source eye scene passes**, plus
 comparable timing; an accepted profile or foveated final copy proves neither.
+Eye mode retains its profile until its swapchains are released. After current
+view location and before either source-eye draw it refreshes both swapchains,
+then immediately queries `xrGetFoveationEyeTrackedStateMETA`, following the
+[Khronos cadence recommendation](https://registry.khronos.org/OpenXR/specs/1.1/man/html/xrGetFoveationEyeTrackedStateMETA.html).
+A missing query function selects the existing fixed fallback. Partial update,
+query failure, invalid flags or invalid NDC centers cannot report a valid eye
+state. Both updates are retried on the next eligible frame without rebuilding
+live swapchains. Normal focus/renderability and the existing bounded unattended
+force-render authorization are distinct eligibility paths; forced diagnostics
+never invent gaze validity. Begin/abort, focus loss, session loss and teardown
+clear the previous frame's eye state.
+
 The bridge's `status()` exposes `foveationAvailable`, `eyeFoveationSupported`,
 `foveationRequested`, `foveationApplied`, `foveationMessage`, and
-`foveationSourceShading`. `Applied` means both OpenXR updates succeeded;
+`foveationSourceShading`, plus per-frame attempt/update/query results, display
+time, validity/flags and both NDC centers. `Applied` means profile setup succeeded;
 source shading remains explicitly `unverified-runtime-injection`.
 
 Protocol details follow the Khronos [swapchain foveation create flags](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSwapchainCreateFoveationFlagBitsFB.html),
@@ -336,15 +383,15 @@ source meshes owned by ChunkMesher.
 `DrawDistance.status()` exposes the last draw's mode, active XR use, cache
 readiness, pending draws, index uploads and full/selected eligible map index
 counts. Divide the index counts by three for triangles; they include both eyes
-but exclude actors, untouched water and the shadow pass. It does not read GPU
+but exclude actors and water. Shadow work has separate terrain/dynamic counters. It does not read GPU
 resources or log each frame.
 
 The test expands each group by 8 world pixels and the side frustum planes by 4%.
 It bounds the exact quadratic WorldCurve vertical displacement, including
 interior extrema, then expands for the shader's camera-facing depth pull. This
 also conservatively covers geometry pulled through a very close eye. Near/far
-plane rejection is intentionally omitted. Actors and full shadow
-casters remain unchanged. The pinned water reflection is screen-space: it reads
+plane rejection is intentionally omitted for eye selection. Actors remain
+unchanged; the independent shadow selector uses the light volume described above. The pinned water reflection is screen-space: it reads
 the already-rendered color/depth image and falls back to sky outside that image;
 it does not render a separate reflected camera. Water stays on its original
 complete mesh/index stream, including when its shader falls back to Voxel3D,
@@ -356,3 +403,11 @@ Full-resolution same-update image comparisons are the acceptance evidence for
 this selection. Primitive-count reduction is host geometry evidence only; it is
 not a Steam Frame FPS measurement. Earlier viewport-window screenshots are a
 rejected experiment and do not describe the production behavior.
+
+Opt-in `[vr-source-eye]` telemetry records actual source and resolved canvas sizes,
+AA samples/factor and source-eye/frame identity. `[vr-foveation-frame]` reports the
+latest before-render runtime update/query state with raw focus/render provenance;
+source FDM attachment remains explicitly unverified. `[vr-shadow-work]` separates
+terrain builds/hits/triangles, dynamic triangles and exact blits. Nested timestamp
+queries retain the outer source-eye span and separate shadow spans in the same
+bounded nonblocking ring; these overlapping spans must not be summed together.
