@@ -119,6 +119,65 @@ function Telemetry.isEnabled()
   return enabled
 end
 
+local function frameClockBucket()
+  if not state.frameClock then
+    state.frameClock={calls=0,inactive=0,selectedSum=0,predictedCount=0,predictedSum=0,predictedMax=0,
+      discarded=0,fallbacks=0,reasons={},sources={},resets=0,resetReasons={}}
+  end
+  return state.frameClock
+end
+
+-- Account for the delta actually returned to love.update, separately from
+-- submitted frames. Inactive calls do not represent simulation advancement.
+function Telemetry.recordFrameDelta(selected,elapsed,reason,source,active)
+  if not enabled or not state.armed then return end
+  local c=frameClockBucket()
+  c.firstFrame=c.firstFrame or state.frame;c.lastFrame=state.frame
+  if not active then c.inactive=c.inactive+1;return end
+  c.calls=c.calls+1;c.selectedSum=c.selectedSum+selected
+  c.selectedMin=math.min(c.selectedMin or selected,selected)
+  c.selectedMax=math.max(c.selectedMax or selected,selected)
+  if elapsed then
+    c.predictedCount=c.predictedCount+1;c.predictedSum=c.predictedSum+elapsed
+    c.predictedMax=math.max(c.predictedMax,elapsed)
+    c.discarded=c.discarded+math.max(0,elapsed-selected)
+  end
+  if reason~="predicted" then
+    c.fallbacks=c.fallbacks+1;c.reasons[reason]=(c.reasons[reason] or 0)+1
+    c.sources[source]=(c.sources[source] or 0)+1
+  end
+end
+
+function Telemetry.recordClockReset(reason)
+  if not enabled or not state.armed then return end
+  local c=frameClockBucket()
+  c.resets=c.resets+1;c.resetReasons[reason]=(c.resetReasons[reason] or 0)+1
+end
+
+local function reasonCounts(values)
+  local result={}
+  for reason,count in pairs(values) do result[#result+1]=reason..":"..count end
+  table.sort(result)
+  return #result>0 and table.concat(result,",") or "none"
+end
+
+function Telemetry.recordSettings(game,lib)
+  if not enabled or not state.armed then return end
+  local ok,shadows=pcall(function()return lib.require("Shadows").enabled()end)
+  if not ok then shadows="unavailable" end
+  local cap=package.loaded["src.core.FrameCap"]
+  local maxFps=cap and cap.current or "unavailable"
+  local speedOK,speed=pcall(function()return game:logicSpeed()end)
+  if not speedOK then speed="unavailable" end
+  local previous=state.settings
+  if not previous or previous.scene~=state.scene or previous.shadows~=shadows
+      or previous.maxFps~=maxFps or previous.speed~=speed then
+    state.settings={scene=state.scene,shadows=shadows,maxFps=maxFps,speed=speed}
+    print("[vr-settings]","frame="..state.frame,"scene="..state.scene,
+      "shadows_enabled="..tostring(shadows),"max_fps_setting="..tostring(maxFps),"logic_speed="..tostring(speed))
+  end
+end
+
 function Telemetry.attach(nativeBridge)
   if not enabled then return false end
   bridge = nativeBridge
@@ -267,6 +326,8 @@ end
 function Telemetry.startWindow()
   if not enabled then return false end
   state.buckets = {}
+  state.frameClock = nil
+  state.settings = nil
   state.armed = true
   state.firstFrame = state.frame + 1
   state.lastSampleWallNs = nil
@@ -480,8 +541,21 @@ function Telemetry.sample()
     -- excludes interval utilization without discarding useful per-scene work.
     printSceneBuckets(sample, windowScene)
   end
+  local c=state.frameClock
+  if c then
+    local function ms(seconds)return milliseconds(seconds and seconds*1000000000)end
+    print("[vr-frame-clock]","scene="..tostring(windowScene),
+      "frame="..tostring(c.firstFrame or state.frame).."-"..tostring(c.lastFrame or state.frame),
+      "selected_calls="..c.calls,"inactive_calls="..c.inactive,
+      "selected_sum_ms="..ms(c.selectedSum),"selected_min_ms="..ms(c.selectedMin),"selected_max_ms="..ms(c.selectedMax),
+      "predicted_elapsed_count="..c.predictedCount,"predicted_elapsed_sum_ms="..ms(c.predictedSum),
+      "predicted_elapsed_max_ms="..ms(c.predictedMax),"discarded_elapsed_ms="..ms(c.discarded),
+      "fallback_count="..c.fallbacks,"fallback_reasons="..reasonCounts(c.reasons),
+      "fallback_sources="..reasonCounts(c.sources),"clock_resets="..c.resets,"reset_reasons="..reasonCounts(c.resetReasons))
+  end
   if state.armed then printGpuTimestamps(sample, windowScene, tagsText) end
   state.buckets = {}
+  state.frameClock = nil
   state.sceneChangesSinceSample = 0
   state.nonRenderableSinceSample = false
   state.lastSampleScene = state.scene

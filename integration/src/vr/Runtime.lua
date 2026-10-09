@@ -694,15 +694,28 @@ local function periodFrameDelta(native)
      and period < 1e9 then
     local seconds = period / 1000000000
     if seconds >= XR_MIN_FRAME_DELTA and seconds <= XR_MAX_FRAME_DELTA then
-      return seconds
+      return seconds, "runtime-period"
     end
   end
-  return XR_DEFAULT_FRAME_DELTA
+  return XR_DEFAULT_FRAME_DELTA, "default-period"
 end
 
-local function resetXrFrameClock()
+local function resetXrFrameClock(reason)
+  if telemetryRequested and (state.lastPredictedDisplayTime or state.predictedFrameDelta) then
+    local diagnostics=telemetry()
+    if diagnostics then diagnostics.recordClockReset(reason or "reset") end
+  end
   state.lastPredictedDisplayTime = nil
   state.predictedFrameDelta = nil
+  if telemetryRequested then
+    state.frameClockElapsed,state.frameClockReason,state.frameClockSource=nil,nil,nil
+  end
+end
+
+local function inactiveClockReason(native)
+  if native and native.focused==true then return "render-loss" end
+  if native and native.shouldRender==true then return "focus-loss" end
+  return "focus-render-loss"
 end
 
 local function updateXrFrameClock(native)
@@ -712,27 +725,37 @@ local function updateXrFrameClock(native)
     and native.forceRenderActive == true
     and native.effectiveShouldRender == true
   if not ordinaryRendering and not forcedUnattendedRendering then
-    resetXrFrameClock()
+    resetXrFrameClock(inactiveClockReason(native))
     return
   end
 
   local displayTime = native.predictedDisplayTime
-  local delta = periodFrameDelta(native)
+  local delta,source = periodFrameDelta(native)
+  local measured,reason=nil,"startup"
   if validXrTimestamp(displayTime) then
     local previous = state.lastPredictedDisplayTime
     if validXrTimestamp(previous) and displayTime > previous then
-      local measured = (displayTime - previous) / 1000000000
+      measured = (displayTime - previous) / 1000000000
       -- Stalls and malformed/nonmonotonic runtime timestamps must not turn
       -- into a large simulation catch-up. Period is the startup/recovery path.
       if measured >= XR_MIN_FRAME_DELTA and measured <= XR_MAX_FRAME_DELTA then
         delta = measured
+        reason,source="predicted","predicted"
+      else
+        reason=measured>XR_MAX_FRAME_DELTA and "too-long" or "too-short"
       end
+    elseif validXrTimestamp(previous) then
+      reason="nonmonotonic"
     end
     state.lastPredictedDisplayTime = displayTime
   else
     state.lastPredictedDisplayTime = nil
+    reason="invalid-timestamp"
   end
   state.predictedFrameDelta = delta
+  if telemetryRequested then
+    state.frameClockElapsed,state.frameClockReason,state.frameClockSource=measured,reason,source
+  end
 end
 
 -- xrWaitFrame is the clock once OpenXR starts pacing. Use the difference
@@ -740,8 +763,15 @@ end
 -- frames, with the runtime period for startup/resume and invalid timestamps.
 function Runtime.frameDelta(fallback)
   if not Runtime.isFramePaced() then return fallback end
-  return state.predictedFrameDelta
+  local delta=state.predictedFrameDelta
     or periodFrameDelta(state.nativeStatus or refreshNativeStatus() or {})
+  if telemetryRequested then
+    local diagnostics=telemetry()
+    if diagnostics then diagnostics.recordFrameDelta(delta,state.frameClockElapsed,
+      state.frameClockReason or "inactive",state.frameClockSource or "inactive",
+      state.predictedFrameDelta~=nil) end
+  end
+  return delta
 end
 
 -- Focus loss and standby freeze game simulation. The bridge still polls
@@ -754,7 +784,7 @@ function Runtime.shouldSimulate()
     and native.forceRenderActive == true
     and native.effectiveShouldRender == true
   local active = ordinaryRendering or forcedUnattendedRendering
-  if not active then resetXrFrameClock() end
+  if not active then resetXrFrameClock(inactiveClockReason(native)) end
   return active
 end
 
@@ -897,7 +927,7 @@ function Runtime.beginFrame(width, height)
   if state.framePaced then
     updateXrFrameClock(state.nativeStatus)
   else
-    resetXrFrameClock()
+    resetXrFrameClock("not-paced")
   end
   if diagnostics then
     local telemetryStatus = copyTable(state.nativeStatus)
@@ -1210,7 +1240,7 @@ function Runtime.shutdown()
   state.framePaced = false
   state.shouldRender = true
   state.poseOrigin = nil
-  resetXrFrameClock()
+  resetXrFrameClock("shutdown")
   state.pendingSubmit = nil
   state.startedWidth = nil
   state.startedHeight = nil

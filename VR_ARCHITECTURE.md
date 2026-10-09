@@ -304,6 +304,11 @@ using all six conservative legacy GL clip planes. Shadow vertices are uncurved a
 have no eye-camera pull. Off-camera casters inside the light volume survive;
 unknown/preparing meshes and invalid transforms fail open. Separate index buffers
 retain original triangle order and keep source meshes and eye selections intact.
+The original index stream is packed once during budgeted mesh preparation.
+Changing eye/light selections copy retained contiguous ranges into reusable CPU
+scratch, then upload the exact used prefix to their separate GPU index buffers.
+Head motion no longer converts every selected Lua index or allocates fresh index
+ByteData each update. Plane tests, bounds, margins and triangle order are unchanged.
 `POKEPORT_VR_SHADOW_OPTIMIZATION=off` selects the unchanged combined sun pass for
 comparison. These changes are scoped to the native stereo call; flat mode retains
 its original path.
@@ -313,6 +318,24 @@ including cold/warm caches, player/NPC movement, real atlas animation, sunlight 
 fitted-camera changes. The actual packed-shadow/depth overlap probe and copy
 failure/state/type/format/alias cases live in `shadow_optimization`. Host triangle
 and pass counts are work evidence, not Frame timing or worn acceptance.
+For a selector-only baseline, the same scene driver accepts
+`POKEPORT_TEST_CULL_BASELINE` and `POKEPORT_TEST_CULL_CANDIDATE` Lua paths. It compares
+a tracked head-turn sweep at full eye size, reports actual selector thread CPU,
+and requires exact images and selected counts. `POKEPORT_TEST_CULL_UNCULLED=1`
+instead checks three head poses against the complete unculled terrain. The real
+mesh regression also accepts the baseline path and compares index bytes for
+moving eye/light poses on indexed and non-indexed meshes.
+
+Opt-in `[vr-frame-clock]` interval records describe the deltas actually returned
+by `Runtime.frameDelta`: active selected count/sum/min/max, inactive calls,
+positive predicted elapsed count/sum/max, fallback reasons and period sources,
+discarded elapsed, and actual clock resets by reason. They count clock choices,
+not fixed simulation callbacks. The existing policy accepts deltas through
+100ms inclusive and replaces larger gaps with a predicted period; diagnostics
+do not alter it. Focus/render gaps reset the clock and are not counted as lost
+active game time. `[vr-settings]` reports changes to the real shadow switch,
+configured maximum FPS and effective `Game:logicSpeed()`; maximum FPS is a
+setting snapshot, not a claim that it limits compositor-paced VR.
 
 ### Runtime foveation negotiation (effectiveness awaiting device proof)
 

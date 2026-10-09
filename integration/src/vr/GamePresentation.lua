@@ -71,7 +71,7 @@ function Presentation.beginDraw(game)
   if not lib then return end
   local telemetry = diagnosticTelemetry()
   local scene = sceneName(game, lib)
-  if telemetry then telemetry.setScene(scene) end
+  if telemetry then telemetry.setScene(scene);telemetry.recordSettings(game,lib) end
   drawDistance = drawDistance or require("src.vr.DrawDistance")
   drawDistance.begin(lib)
   local minimap

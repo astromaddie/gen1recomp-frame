@@ -35,9 +35,9 @@ function bridge.beginFrame()
     { fov = { left = -0.7, right = 0.7 } }, bridge.shouldRender
 end
 function bridge.status()
-  return { available = true, ready = true, focused = true,
+  return { available = true, ready = true, focused = bridge.focused~=false,
     shouldRender = bridge.shouldRender, predictedDisplayPeriod = 11111111,
-    predictedDisplayTime = now.wallNs, quitRequested = false,
+    predictedDisplayTime = bridge.displayTime or now.wallNs, quitRequested = false,
     xrWaitWallNs = bridge.lastWaitWallNs,
     xrWaitMainCpuNs = bridge.lastWaitMainCpuNs }
 end
@@ -124,6 +124,47 @@ for _, line in ipairs(lines) do
 end
 assert(excluded and not excluded:find("process_cpu_pct="),
   "Runtime's actual shouldRender state must exclude standby CPU utilization")
+
+-- Observe the actual returned clock choice, including the existing 100ms
+-- boundary. This test deliberately does not change the recovery policy.
+Telemetry.startWindow()
+bridge.shouldRender=true;bridge.displayTime=1000000000000
+local function advance(ns,expected)
+  bridge.displayTime=bridge.displayTime+ns
+  assert(Runtime.beginFrame(1728,1728))
+  assert(math.abs(Runtime.frameDelta(0.5)-expected)<1e-12)
+  Runtime.abortFrame()
+end
+advance(0,0.011111111) -- startup
+advance(22222222,0.022222222) -- skipped display frame is preserved
+advance(100000000,0.1) -- inclusive boundary
+advance(100000001,0.011111111) -- one ns over boundary uses period
+bridge.focused=false
+assert(not Runtime.shouldSimulate());assert(not Runtime.shouldSimulate())
+assert(Runtime.beginFrame(1728,1728));Runtime.frameDelta(0.5);Runtime.abortFrame()
+bridge.focused=true
+advance(500000000,0.011111111) -- focus gap is reset, not discarded game time
+bridge.shouldRender=false
+assert(not Runtime.shouldSimulate());assert(not Runtime.shouldSimulate())
+now.wallNs=now.wallNs+1000000000
+Telemetry.sample()
+local clockLine
+for _,line in ipairs(lines) do if line:find("%[vr%-frame%-clock%]") then clockLine=line end end
+assert(clockLine and clockLine:find("selected_calls=5") and clockLine:find("inactive_calls=1"),clockLine)
+assert(clockLine:find("selected_sum_ms=155.556") and clockLine:find("selected_min_ms=11.111")
+  and clockLine:find("selected_max_ms=100.000"),clockLine)
+assert(clockLine:find("predicted_elapsed_count=3") and clockLine:find("predicted_elapsed_sum_ms=222.222")
+  and clockLine:find("discarded_elapsed_ms=88.889"),clockLine)
+assert(clockLine:find("fallback_count=3") and clockLine:find("startup:2,too%-long:1")
+  and clockLine:find("runtime%-period:3"),clockLine)
+assert(clockLine:find("clock_resets=2") and clockLine:find("focus%-loss:1,render%-loss:1"),clockLine)
+-- New windows cannot inherit elapsed-time losses or reset counts.
+Telemetry.startWindow();bridge.shouldRender=true
+advance(1000000000,0.011111111)
+now.wallNs=now.wallNs+1000000000;Telemetry.sample()
+for _,line in ipairs(lines) do if line:find("%[vr%-frame%-clock%]") then clockLine=line end end
+assert(clockLine:find("selected_calls=1") and clockLine:find("discarded_elapsed_ms=0.000")
+  and clockLine:find("clock_resets=0"),clockLine)
 
 Telemetry.stopWindow()
 Runtime.abortFrame()

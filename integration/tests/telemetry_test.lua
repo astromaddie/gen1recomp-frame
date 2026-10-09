@@ -78,6 +78,16 @@ Telemetry.startWindow()
 assert(bridge.resetWindows == 1,
   "the bounded diagnostic window must reset setup-time query drop counters")
 Telemetry.recordFrame(9, { focused = true, shouldRender = true })
+local shadowEnabled,speed=true,1
+package.loaded["src.core.FrameCap"]={current=75}
+local settingsGame={logicSpeed=function()return speed end}
+local settingsLib={require=function(name)assert(name=="Shadows");return {enabled=function()return shadowEnabled end}end}
+Telemetry.recordSettings(settingsGame,settingsLib)
+local settingsCount=#lines
+Telemetry.recordSettings(settingsGame,settingsLib);assert(#lines==settingsCount,"unchanged settings should not spam")
+shadowEnabled=false;speed=2;Telemetry.recordSettings(settingsGame,settingsLib)
+assert(lines[#lines]:find("shadows_enabled=false") and lines[#lines]:find("max_fps_setting=75")
+  and lines[#lines]:find("logic_speed=2"),"settings snapshot must read actual game getters")
 
 local token = Telemetry.beginStage("game_draw")
 now.wallNs = now.wallNs + 13000000

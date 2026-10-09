@@ -27,7 +27,7 @@ function love.load()
   local modules={ChunkMesher={pair=function()return terrain,water end,grass=function()end,flowers=function()end},
     Mat4=Mat,Voxel3D={draw=draw,curveK=0,camera={}},Water={draw=draw},
     SpriteBillboards={mesh=function()return actor end,shadowQuad=function()return actor end}}
-  local cam={x=0,y=0};local model;local monoCamera
+  local cam={x=0,y=0,yaw=0};local model;local monoCamera
   modules.VoxelScene={render=function(state,w,h,vw,vh)
     local a,b=modules.ChunkMesher.pair()
     modules.Voxel3D.draw(a,nil,model);modules.VoxelScene.drawWater({{b,nil,model}})
@@ -43,7 +43,7 @@ function love.load()
   local function views()
     local result={}
     for i,x in ipairs({-1.536,1.536})do
-      result[i]={eye={32+x+cam.x,100,128+cam.y},focus={32+x+cam.x,0,32+cam.y},up={0,1,0},
+      result[i]={eye={32+x+cam.x,100,128+cam.y},focus={32+x+cam.x+96*math.sin(cam.yaw),0,128+cam.y-96*math.cos(cam.yaw)},up={0,1,0},
         fov={left=-0.8,right=0.8,up=0.8,down=-0.8}}
     end
     return result[1],result[2]
@@ -123,6 +123,58 @@ function love.load()
   frame();frame()
   assert(not pcall(retired.getVertexCount,retired),"unused proxy must be explicitly released")
   assert(replacement:getVertexCount()==#verts,"source ownership must stay with ChunkMesher")
+  local baselinePath=os.getenv("POKEPORT_TEST_CULL_BASELINE")
+  if baselinePath then
+    local candidate=Window
+    local baseline=assert(loadfile(baselinePath))()
+    local ffi=require("ffi")
+    local function bytes(mesh)
+      if not mesh then return "nil" end
+      local map=mesh:getVertexMap()
+      local n=map and #map or mesh:getVertexCount()
+      local data=ffi.new("uint32_t[?]",n)
+      for i=1,n do data[i-1]=(map and map[i] or i)-1 end
+      return ffi.string(data,n*4)
+    end
+    for _,indexed in ipairs({true,false}) do
+      candidate.release();baseline.release()
+      terrain=assert(Voxel.newMesh(verts,indexed and indices or nil))
+      -- Non-indexed input must also be a complete original quad stream.
+      if not indexed then
+        terrain:release();local expanded={}
+        for _,i in ipairs(indices) do expanded[#expanded+1]=verts[i] end
+        terrain=assert(Voxel.newMesh(expanded))
+      end
+      love.timer.getTime=function()return 0 end
+      for _,implementation in ipairs({baseline,candidate}) do Window=implementation;frame();frame() end
+      love.timer.getTime=originalClock
+      local savedNew=love.data.newByteData;local allocations=0
+      love.data.newByteData=function(...)allocations=allocations+1;return savedNew(...)end
+      for pose=1,40 do
+        cam.x=160+180*math.sin(pose*0.37);cam.y=100+90*math.cos(pose*0.21);cam.yaw=math.sin(pose*0.27)*1.2
+        model=pose%2==0 and Mat.translate(-64,0,32) or nil
+        local maps={};local light=Mat.mul(Mat.scale(1/120,1/80,1/90),Mat.translate(-cam.x,-32,-cam.y))
+        for i,implementation in ipairs({baseline,candidate}) do
+          Window=implementation;frame();local eyeBytes=bytes(draws[1] and draws[1][1])
+          local shadow=Window.shadowSelection(terrain,model,light)
+          maps[i]={eyeBytes,bytes(shadow)}
+          assert(eyeBytes==bytes(draws[1] and draws[1][1]),"shadow upload changed terrain index bytes")
+        end
+        assert(maps[1][1]==maps[2][1] and maps[1][2]==maps[2][2],"baseline index bytes differ at moving pose "..pose)
+      end
+      love.data.newByteData=savedNew
+      print("CULL_INDEX_BYTES_PASS",indexed and "indexed" or "nonindexed","40 moving eye/light poses")
+      -- Candidate storage is retained across changing selections: no new
+      -- ByteData allocations after both paths have been exercised.
+      local before=allocations
+      love.data.newByteData=function(...)allocations=allocations+1;return savedNew(...)end
+      Window=candidate;cam.x=350;cam.yaw=-0.8;frame();Window.shadowSelection(terrain,nil,all)
+      cam.x=50;cam.yaw=0.8;frame();Window.shadowSelection(terrain,nil,light)
+      love.data.newByteData=savedNew
+      assert(allocations==before,"candidate reallocates index scratch during head motion")
+    end
+    baseline.release();Window=candidate
+  end
   Window.release()
   assert(modules.Voxel3D.draw==draw)
   print("DRAW_DISTANCE_MESH_PASS: real pinned mesh format/indexed GPU path, conservative tall boundary geometry, original ordered indices and shadow source, water, actors unchanged, stereo readiness, translated neighbor, scroll/cache/invalidation")

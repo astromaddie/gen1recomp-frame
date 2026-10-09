@@ -16,10 +16,16 @@ local function prepare(record)
   local n=indices and #indices or count
   assert(n%6==0,"expected pinned quad triangle stream")
   record.total=n
+  -- Pack once during budgeted preparation. View changes copy contiguous
+  -- original ranges instead of converting millions of Lua indices again.
+  record.packed=love.data.newByteData(n*4)
+  local packed=ffi.cast("uint32_t*",record.packed:getFFIPointer())
+  record.packedPointer=packed
   local byCell,groups,ranges={},{},{}
   for first=1,n,6 do
     local x0,y0,z0,x1,y1,z1=math.huge,math.huge,math.huge,-math.huge,-math.huge,-math.huge
     for j=first,first+5 do
+      packed[j-1]=(indices and indices[j] or j)-1
       local x,y,z=mesh:getVertexAttribute(indices and indices[j] or j,1)
       x0=math.min(x0,x);y0=math.min(y0,y);z0=math.min(z0,z)
       x1=math.max(x1,x);y1=math.max(y1,y);z1=math.max(z1,z)
@@ -37,7 +43,7 @@ local function prepare(record)
     if previous and previous[3]==g then previous[2]=first+5 else ranges[#ranges+1]={first,first+5,g} end
     if first%1536==1 then coroutine.yield() end
   end
-  record.indices,record.ranges,record.groups=indices,ranges,groups
+  record.ranges,record.groups=ranges,groups
   if not record.visibilityOnly then
     local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},count,"triangles","dynamic")
     record.selected=selected
@@ -49,6 +55,21 @@ end
 local function release(record)
   if record.selected then record.selected:release() end
   if record.shadowSelected then record.shadowSelected:release() end
+  if record.packed then record.packed:release() end
+  if record.scratch then record.scratch:release() end
+end
+local function uploadSelection(record,selected,field,n)
+  if not record.scratch then record.scratch=love.data.newByteData(record.total*4) end
+  local out=ffi.cast("uint32_t*",record.scratch:getFFIPointer())
+  local index=0
+  for _,r in ipairs(record.ranges) do if r[3][field] then
+    local count=r[2]-r[1]+1
+    ffi.copy(out+index,record.packedPointer+r[1]-1,count*4)
+    index=index+count
+  end end
+  -- LOVE copies this prefix synchronously; one CPU scratch buffer can serve
+  -- the independent terrain and shadow GPU index buffers without aliasing.
+  selected:setVertexMap(record.scratch,"uint32",n)
 end
 local function register(mesh,visibilityOnly)
   if not mesh then return end
@@ -151,11 +172,7 @@ local function selection(mesh,model,pull)
       for _,r in ipairs(record.ranges) do if r[3].keep then n=n+r[2]-r[1]+1 end end
       record.count=n
       if n>0 and n<record.total then
-        local data=love.data.newByteData(n*4);local out=ffi.cast("uint32_t*",data:getFFIPointer());local index=0
-        for _,r in ipairs(record.ranges) do if r[3].keep then
-          for j=r[1],r[2] do out[index]=(record.indices and record.indices[j] or j)-1;index=index+1 end
-        end end
-        record.selected:setVertexMap(data,"uint32");data:release()
+        uploadSelection(record,record.selected,"keep",n)
         metrics.indexUpdates=metrics.indexUpdates+1
       end
     end
@@ -276,11 +293,7 @@ function Culling.shadowSelection(mesh,model,clip)
         for _,a in ipairs(mesh:getVertexFormat()) do selected:attachAttribute(a[1],mesh) end
         record.shadowSelected=selected
       end
-      local data=love.data.newByteData(n*4);local out=ffi.cast("uint32_t*",data:getFFIPointer());local index=0
-      for _,r in ipairs(record.ranges) do if r[3].shadowKeep then
-        for j=r[1],r[2] do out[index]=(record.indices and record.indices[j] or j)-1;index=index+1 end
-      end end
-      record.shadowSelected:setVertexMap(data,"uint32");data:release()
+      uploadSelection(record,record.shadowSelected,"shadowKeep",n)
     end
   end
   if record.shadowCount==0 then return nil,record.total,0 end

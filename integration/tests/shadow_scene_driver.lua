@@ -15,6 +15,51 @@ return function(game)
   local Mesher=lib.require("ChunkMesher")
   local Runtime=require("src.vr.Runtime")
   local Window=require("src.vr.DrawDistance")
+  local baselinePath=os.getenv("POKEPORT_TEST_CULL_BASELINE")
+  local unculledReference=os.getenv("POKEPORT_TEST_CULL_UNCULLED")=="1"
+  local implementations
+  if baselinePath then
+    implementations={assert(loadfile(baselinePath))(),
+      assert(loadfile(assert(os.getenv("POKEPORT_TEST_CULL_CANDIDATE"))))()}
+  end
+  local threadTime,selectionCpu
+  local function selectCuller(index)
+    Window.finish()
+    for k,v in pairs(implementations[index]) do Window[k]=v end
+    local begin,finish=Window.begin,Window.finish
+    local restoreSelection
+    Window.finish=function(...)
+      if restoreSelection then restoreSelection();restoreSelection=nil end
+      return finish(...)
+    end
+    Window.begin=function(...)
+      if restoreSelection then restoreSelection();restoreSelection=nil end
+      begin(...)
+      -- Time the real private selector, excluding software rasterization.
+      -- This QA-only wrapper neither replaces its algorithm nor its result.
+      local draw=lib.require("Voxel3D").draw
+      for i=1,20 do
+        local name,value=debug.getupvalue(draw,i)
+        if not name then break end
+        if name=="selection" then
+          debug.setupvalue(draw,i,function(...)
+            local start=threadTime();local selected=value(...)
+            selectionCpu=selectionCpu+threadTime()-start
+            return selected
+          end)
+          restoreSelection=function()debug.setupvalue(draw,i,value)end
+          break
+        end
+      end
+    end
+  end
+  local ffi=require("ffi")
+  ffi.cdef("int clock_gettime(int, void*);")
+  local timespec=ffi.new("int64_t[2]")
+  threadTime=function()
+    assert(ffi.C.clock_gettime(3,timespec)==0)
+    return tonumber(timespec[0])+tonumber(timespec[1])*1e-9
+  end
   local level=tonumber(os.getenv("QA_LEVEL")) or 3
   assert(require("src.render.Pipelines").setLevel("voxel",level)==level)
   for i=1,600 do U.wait(1);if Voxel.ready and Mesher.pending()==0 then break end end
@@ -59,10 +104,11 @@ return function(game)
     w=math.cos(yaw)*math.cos(pitch)*math.cos(roll)+math.sin(yaw)*math.sin(pitch)*math.sin(roll)}
   shift=tonumber(os.getenv("QA_SHIFT")) or 0
   if os.getenv("QA_CURVE") then lib.require("WorldCurve").setting:sync(tonumber(os.getenv("QA_CURVE"))) end
-  local mode="on"
+  local mode,cullerMode="on","frustum"
   local getenv=os.getenv
   os.getenv=function(name)
     if name=="POKEPORT_VR_SHADOW_OPTIMIZATION" then return mode end
+    if implementations and name=="POKEPORT_VR_DRAW_DISTANCE" then return cullerMode end
     return getenv(name)
   end
   local Optimization=require("src.vr.ShadowOptimization")
@@ -85,7 +131,7 @@ return function(game)
   end
   local draw=shadow.draw
   shadow.draw=function(mesh,...)
-    if mesh then local map=mesh:getVertexMap();counts.triangles=(counts.triangles or 0)+(map and #map or mesh:getVertexCount())/3 end
+    if mesh and not implementations then local map=mesh:getVertexMap();counts.triangles=(counts.triangles or 0)+(map and #map or mesh:getVertexCount())/3 end
     return draw(mesh,...)
   end
   local waterBegin=lib.require("Voxel3D").beginWater
@@ -109,9 +155,19 @@ return function(game)
     local function pair(label,cold)
       if cold then Optimization.release() end
       Runtime.beginFrame(1728,1728)
-      mode="off";shadow.discard();counts={};originalDraw()
+      if implementations then selectCuller(1) end
+      cullerMode=unculledReference and "off" or "frustum"
+      mode=implementations and "on" or "off";shadow.discard();counts={}
+      selectionCpu=0
+      local started=threadTime();originalDraw();local beforeCpu=(threadTime()-started)*1000
+      local beforeSelection=selectionCpu*1000
+      local beforeCuller=Window.status()
       local a=snapshot(label.."-original");local before=counts
-      mode="on";shadow.discard();counts={};originalDraw()
+      if implementations then selectCuller(2) end
+      cullerMode="frustum"
+      mode="on";shadow.discard();counts={};started=threadTime();selectionCpu=0;originalDraw()
+      local afterCpu=(threadTime()-started)*1000
+      local afterCuller=Window.status()
       local b=snapshot(label.."-optimized");local after=counts
       local status=Optimization.status()
       assert(status.fallbacks==0,status.lastFallback)
@@ -130,8 +186,30 @@ return function(game)
         "source_dynamic",status.sourceDynamicTriangles,"restores",status.restores,
         "max_channel_error",maxError,"mean_channel_error",totalError/(2*1728*1728*3),"different_pixels",changed)
       assert(changed==0,"complete stereo image differs: "..label)
+      if implementations then
+        assert(beforeCuller.pendingDraws==0 and afterCuller.pendingDraws==0,"head-motion comparison includes unprepared meshes")
+        if not unculledReference then assert(beforeCuller.selectedIndices==afterCuller.selectedIndices and beforeCuller.indexUpdates==afterCuller.indexUpdates) end
+        print(unculledReference and "UNCULLED_HEAD_COMPARE" or "HEAD_MOTION_COMPARE",label,"baseline_main_cpu_ms",beforeCpu,"candidate_main_cpu_ms",afterCpu,
+          "baseline_selection_ms",beforeSelection,"candidate_selection_ms",selectionCpu*1000,
+          "index_updates",afterCuller.indexUpdates,"selected_indices",afterCuller.selectedIndices,"different_pixels",changed)
+      end
       for _,images in ipairs({a,b}) do for _,im in ipairs(images) do im:release() end end
     end
+    if implementations then
+      -- Finish both implementations' budgeted preparation under the same
+      -- frozen update, then traverse changing tracked poses continuously.
+      selectionCpu=0
+      for i=1,2 do selectCuller(i);originalDraw();originalDraw() end
+      local sweep=unculledReference and {-45,0,45} or {-45,-30,-15,0,15,30,45,30,15,0,-15,-30,-45}
+      for step,degrees in ipairs(sweep) do
+        local y=math.rad(degrees)/2
+        q={x=math.cos(y)*math.sin(pitch)*math.cos(roll)+math.sin(y)*math.cos(pitch)*math.sin(roll),
+          y=math.sin(y)*math.cos(pitch)*math.cos(roll)-math.cos(y)*math.sin(pitch)*math.sin(roll),
+          z=math.cos(y)*math.cos(pitch)*math.sin(roll)-math.sin(y)*math.sin(pitch)*math.cos(roll),
+          w=math.cos(y)*math.cos(pitch)*math.cos(roll)+math.sin(y)*math.sin(pitch)*math.sin(roll)}
+        pair("head-"..step.."-yaw"..degrees)
+      end
+    else
     pair("cold",true);pair("warm")
     local function changed(label,requiresTerrain)
       counts={};originalDraw()
@@ -183,9 +261,10 @@ return function(game)
         local x=camera.x;camera.x=x+17;changed("camera-fit",true);camera.x=x
       end
     end
+    end
     Scene.glintStep=glint
     love.timer.getTime=realClock;love.timer.getDelta=realDelta;day.hours=realHours;os.getenv=getenv
-    print("SHADOW_SCENE_PASS",game.overworld.map.id,"1728x1728 full stereo, unchanged bf5 caster path vs optimized, same-update comparisons")
+    print(implementations and "HEAD_MOTION_SCENE_PASS" or "SHADOW_SCENE_PASS",game.overworld.map.id,"1728x1728 full stereo, same-update comparisons")
   end
   while not completed do U.wait(1)end
   U.wait(1)
