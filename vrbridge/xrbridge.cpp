@@ -35,6 +35,7 @@ extern "C" {
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -195,12 +196,12 @@ public:
         instanceInfo.applicationInfo.engineVersion = 1;
         instanceInfo.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
 
-        const char* enabledExtensions[] = {
-            XR_KHR_OPENGL_ENABLE_EXTENSION_NAME,
-            kFrameControllerExtensionName,
-        };
-        instanceInfo.enabledExtensionCount = m_frameControllerExtensionAvailable ? 2 : 1;
-        instanceInfo.enabledExtensionNames = enabledExtensions;
+        std::vector<const char*> enabledExtensions{XR_KHR_OPENGL_ENABLE_EXTENSION_NAME};
+        if (m_frameControllerExtensionAvailable)
+            enabledExtensions.push_back(kFrameControllerExtensionName);
+        configureFoveationExtensions(enabledExtensions);
+        instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+        instanceInfo.enabledExtensionNames = enabledExtensions.data();
 
         XrResult result = m_createInstance(&instanceInfo, &m_instance);
         if (XR_FAILED(result)) {
@@ -276,11 +277,17 @@ public:
             return failResult("xrGetSystem", result);
         }
 
+        loadFoveationFunctions();
+        XrSystemFoveationEyeTrackedPropertiesMETA eyeFoveation{
+            XR_TYPE_SYSTEM_FOVEATION_EYE_TRACKED_PROPERTIES_META};
         XrSystemProperties systemProperties{XR_TYPE_SYSTEM_PROPERTIES};
+        if (m_eyeFoveationEnabled) systemProperties.next = &eyeFoveation;
         result = m_getSystemProperties(m_instance, m_systemId, &systemProperties);
         if (XR_FAILED(result)) {
             return failResult("xrGetSystemProperties", result);
         }
+
+        m_eyeFoveationSupported = eyeFoveation.supportsFoveationEyeTracked == XR_TRUE;
 
         XrGraphicsRequirementsOpenGLKHR graphicsRequirements{
             XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR};
@@ -694,6 +701,11 @@ public:
         return true;
     }
 
+    bool foveationAvailable() const { return m_foveationAvailable; }
+    bool eyeFoveationSupported() const { return m_eyeFoveationSupported; }
+    const std::string& foveationRequested() const { return m_foveationRequested; }
+    const std::string& foveationApplied() const { return m_foveationApplied; }
+    const std::string& foveationMessage() const { return m_foveationMessage; }
     const std::string& lastError() const { return m_lastError; }
     bool focused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     bool shouldRender() const { return m_frameState.shouldRender == XR_TRUE; }
@@ -1053,8 +1065,15 @@ private:
             return failResult("xrEnumerateInstanceExtensionProperties", result);
         }
         bool openGlAvailable = false;
+        bool foveation = false, configuration = false, update = false;
+        m_eyeFoveationAvailable = false;
         m_frameControllerExtensionAvailable = false;
         for (const XrExtensionProperties& property : properties) {
+            const std::string name(property.extensionName);
+            foveation |= name == XR_FB_FOVEATION_EXTENSION_NAME;
+            configuration |= name == XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME;
+            update |= name == XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME;
+            m_eyeFoveationAvailable |= name == XR_META_FOVEATION_EYE_TRACKED_EXTENSION_NAME;
             if (std::strcmp(property.extensionName, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME) == 0) {
                 openGlAvailable = true;
             }
@@ -1063,6 +1082,7 @@ private:
                 m_frameControllerExtensionAvailable = true;
             }
         }
+        m_foveationAvailable = foveation && configuration && update;
         return openGlAvailable;
     }
 
@@ -1453,7 +1473,114 @@ private:
         return true;
     }
 
-    bool createSwapchains() {
+    // The OpenGL binding cannot legally request the Vulkan FDM bit, nor the
+    // QCOM scaled-bin bit without its GL extension. flags=0 is valid OpenXR;
+    // Valve's implicit Vulkan layer may handle the underlying Zink passes.
+    // A successful profile request does NOT prove those source passes benefit.
+    void configureFoveationExtensions(std::vector<const char*>& extensions) {
+        const char* value = std::getenv("POKEPORT_XR_FOVEATION");
+        m_foveationRequested = value ? lowerAscii(value) : "eye";
+        m_foveationApplied = "none";
+        m_foveationMessage.clear();
+        if (m_foveationRequested != "eye" && m_foveationRequested != "fixed" &&
+            m_foveationRequested != "off") {
+            m_foveationMessage = "invalid POKEPORT_XR_FOVEATION; expected eye, fixed or off";
+            m_foveationRequested = "off";
+        }
+        m_foveationEnabled = m_foveationAvailable && m_foveationRequested != "off";
+        m_eyeFoveationEnabled = m_foveationEnabled && m_eyeFoveationAvailable &&
+                                m_foveationRequested == "eye";
+        if (!m_foveationEnabled) {
+            if (m_foveationRequested != "off")
+                m_foveationMessage = "required FB foveation extensions unavailable; full-rate fallback";
+            return;
+        }
+        extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+        extensions.push_back(XR_FB_FOVEATION_EXTENSION_NAME);
+        extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
+        if (m_eyeFoveationEnabled)
+            extensions.push_back(XR_META_FOVEATION_EYE_TRACKED_EXTENSION_NAME);
+    }
+
+    void foveationFailure(const char* operation, XrResult result) {
+        if (!m_foveationMessage.empty()) m_foveationMessage += "; ";
+        m_foveationMessage += std::string(operation) + ": " + resultText(result);
+    }
+
+    template<typename Function>
+    bool optionalFoveationFunction(Function& function, const char* name) {
+        PFN_xrVoidFunction raw = nullptr;
+        const XrResult result = m_getInstanceProcAddr(m_instance, name, &raw);
+        if (XR_FAILED(result) || !raw) {
+            foveationFailure(name, XR_FAILED(result) ? result : XR_ERROR_FUNCTION_UNSUPPORTED);
+            return false;
+        }
+        function = reinterpret_cast<Function>(raw);
+        return true;
+    }
+
+    void loadFoveationFunctions() {
+        if (!m_foveationEnabled) return;
+        if (!optionalFoveationFunction(m_createFoveationProfile, "xrCreateFoveationProfileFB") ||
+            !optionalFoveationFunction(m_destroyFoveationProfile, "xrDestroyFoveationProfileFB") ||
+            !optionalFoveationFunction(m_updateSwapchain, "xrUpdateSwapchainFB"))
+            m_foveationEnabled = false;
+    }
+
+    void releaseFoveationProfile() {
+        if (m_foveationProfile && m_destroyFoveationProfile)
+            (void)m_destroyFoveationProfile(m_foveationProfile);
+        m_foveationProfile = XR_NULL_HANDLE;
+    }
+
+    bool createFoveationProfile() {
+        if (!m_foveationEnabled) return false;
+        bool eye = m_eyeFoveationEnabled && m_eyeFoveationSupported;
+        if (m_foveationRequested == "eye" && !eye)
+            m_foveationMessage = "eye-tracked foveation unsupported; requesting fixed fallback";
+        for (;;) {
+            XrFoveationEyeTrackedProfileCreateInfoMETA eyeInfo{
+                XR_TYPE_FOVEATION_EYE_TRACKED_PROFILE_CREATE_INFO_META};
+            XrFoveationLevelProfileCreateInfoFB level{
+                XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB};
+            level.level = XR_FOVEATION_LEVEL_MEDIUM_FB;
+            level.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+            level.next = eye ? &eyeInfo : nullptr;
+            XrFoveationProfileCreateInfoFB info{XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB};
+            info.next = &level;
+            const XrResult result = m_createFoveationProfile(m_session, &info, &m_foveationProfile);
+            if (XR_SUCCEEDED(result)) {
+                m_foveationProfileMode = eye ? "eye-medium" : "fixed-medium";
+                return true;
+            }
+            m_foveationProfile = XR_NULL_HANDLE;
+            foveationFailure(eye ? "create eye profile" : "create fixed profile", result);
+            if (!eye) return false;
+            eye = false;
+        }
+    }
+
+    void releaseSwapchains() {
+        for (Swapchain& swapchain : m_swapchains) {
+            if (m_destroySwapchain && swapchain.handle)
+                (void)m_destroySwapchain(swapchain.handle);
+            swapchain.handle = XR_NULL_HANDLE;
+            swapchain.images.clear();
+        }
+    }
+
+    bool fallbackSwapchains(const char* operation, XrResult result) {
+        foveationFailure(operation, result);
+        m_foveationMessage += "; full-rate fallback";
+        // Recreate BOTH eyes, avoiding asymmetric foveation after a partial
+        // update. This occurs only during initialization, before rendering.
+        releaseSwapchains();
+        releaseFoveationProfile();
+        m_foveationApplied = "none";
+        return createSwapchains(false);
+    }
+
+    bool createSwapchains(bool allowFoveation = true) {
         uint32_t formatCount = 0;
         XrResult result = m_enumerateSwapchainFormats(m_session, 0, &formatCount, nullptr);
         if (XR_FAILED(result)) {
@@ -1497,12 +1624,16 @@ private:
             return fail("requested swapchain dimensions exceed the OpenXR view limits");
         }
 
+        const bool foveated = allowFoveation && createFoveationProfile();
         for (Swapchain& swapchain : m_swapchains) {
+            XrSwapchainCreateInfoFoveationFB foveationInfo{
+                XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB};
             XrSwapchainCreateInfo swapchainInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
             // The bridge uploads pixels into the OpenGL texture and SteamVR
             // samples that texture when it composites the projection layer.
             // Keep both uses explicit for runtimes that use the declared
             // usage to choose the backing image capabilities.
+            swapchainInfo.next = foveated ? &foveationInfo : nullptr;
             swapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
                                        XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT |
                                        XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
@@ -1515,7 +1646,15 @@ private:
             swapchainInfo.mipCount = 1;
             result = m_createSwapchain(m_session, &swapchainInfo, &swapchain.handle);
             if (XR_FAILED(result)) {
+                if (foveated) return fallbackSwapchains("create foveated GL swapchain", result);
                 return failResult("xrCreateSwapchain", result);
+            }
+            if (foveated) {
+                XrSwapchainStateFoveationFB state{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
+                state.profile = m_foveationProfile;
+                result = m_updateSwapchain(swapchain.handle,
+                    reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state));
+                if (XR_FAILED(result)) return fallbackSwapchains("apply foveation profile", result);
             }
             swapchain.width = width;
             swapchain.height = height;
@@ -1539,6 +1678,8 @@ private:
                 return failResult("xrEnumerateSwapchainImages", result);
             }
         }
+        if (foveated) m_foveationApplied = m_foveationProfileMode;
+        releaseFoveationProfile(); // Parameters are retained by the swapchains.
         return true;
     }
 
@@ -2175,13 +2316,9 @@ private:
             (void)m_destroySpace(m_referenceSpace);
         }
         m_referenceSpace = XR_NULL_HANDLE;
-        for (Swapchain& swapchain : m_swapchains) {
-            if (m_destroySwapchain && swapchain.handle) {
-                (void)m_destroySwapchain(swapchain.handle);
-            }
-            swapchain.handle = XR_NULL_HANDLE;
-            swapchain.images.clear();
-        }
+        releaseSwapchains();
+        releaseFoveationProfile();
+        m_foveationApplied = "none";
         cleanupActions();
         if (m_destroySession && m_session) {
             (void)m_destroySession(m_session);
@@ -2229,6 +2366,22 @@ private:
 #endif
     }
 
+#if defined(XRBRIDGE_TESTING)
+    friend struct FoveationTest;
+#endif
+    bool m_foveationAvailable = false;
+    bool m_eyeFoveationAvailable = false;
+    bool m_foveationEnabled = false;
+    bool m_eyeFoveationEnabled = false;
+    bool m_eyeFoveationSupported = false;
+    std::string m_foveationRequested = "off";
+    std::string m_foveationApplied = "none";
+    std::string m_foveationProfileMode;
+    std::string m_foveationMessage;
+    XrFoveationProfileFB m_foveationProfile = XR_NULL_HANDLE;
+    PFN_xrCreateFoveationProfileFB m_createFoveationProfile = nullptr;
+    PFN_xrDestroyFoveationProfileFB m_destroyFoveationProfile = nullptr;
+    PFN_xrUpdateSwapchainFB m_updateSwapchain = nullptr;
     Config m_config;
 #if defined(_WIN32)
     HMODULE m_loader = nullptr;
@@ -2694,6 +2847,12 @@ static int l_pushStatus(lua_State* L) {
         const int table = lua_gettop(L);
         setBoolField(L, table, "available", g_bridge.isInitialized());
         setBoolField(L, table, "ready", g_bridge.isReady());
+        setBoolField(L, table, "foveationAvailable", g_bridge.foveationAvailable());
+        setBoolField(L, table, "eyeFoveationSupported", g_bridge.eyeFoveationSupported());
+        setStringField(L, table, "foveationRequested", g_bridge.foveationRequested());
+        setStringField(L, table, "foveationApplied", g_bridge.foveationApplied());
+        setStringField(L, table, "foveationMessage", g_bridge.foveationMessage());
+        setStringField(L, table, "foveationSourceShading", "unverified-runtime-injection");
         setBoolField(L, table, "focused", g_bridge.focused());
         setBoolField(L, table, "shouldRender", g_bridge.shouldRender());
         setBoolField(L, table, "quitRequested", g_bridge.quitRequested());

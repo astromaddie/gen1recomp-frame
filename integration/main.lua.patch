@@ -170,55 +170,68 @@
 +    updateVRImporterInput()
 +    return Importer:update(dt)
 +  end
-@@ -483,0 +614,6 @@
+@@ -443 +573,3 @@
+-    local ok, handled, mirrorCanvas = pcall(finish)
++    local ok, handled, mirrorCanvas = pcall(function()
++      return require("src.vr.GamePresentation").finish(Game, finish, vrOutputCanvas)
++    end)
+@@ -483,0 +616,6 @@
 +    if VRRuntime.isBridgeActive() and not vrVsyncDisabled
 +       and love.system and love.system.getOS() == "Linux"
 +       and love.window and love.window.setVSync then
 +      local ok = pcall(love.window.setVSync, 0)
 +      if ok then vrVsyncDisabled = true end
 +    end
-@@ -554,0 +691 @@
+@@ -486,0 +625,5 @@
++  local presentation
++  if vrFrame and VRRuntime.isBridgeActive() and VRRuntime.shouldRender() then
++    presentation = require("src.vr.GamePresentation")
++    presentation.beginDraw(Game)
++  end
+@@ -497,0 +641 @@
++  if presentation then presentation.endDraw() end
+@@ -554,0 +699 @@
 +  if not vrInputAllowed() then return end
-@@ -561,0 +699 @@
+@@ -561,0 +707 @@
 +  if not vrInputAllowed() then return end
-@@ -567,0 +706 @@
+@@ -567,0 +714 @@
 +  if not vrInputAllowed() then return end
-@@ -573,0 +713 @@
+@@ -573,0 +721 @@
 +  if not vrInputAllowed() then return end
-@@ -579,0 +720 @@
+@@ -579,0 +728 @@
 +  if not vrInputAllowed() then return end
-@@ -585,0 +727 @@
+@@ -585,0 +735 @@
 +  if not vrInputAllowed() then return end
-@@ -591,0 +734 @@
+@@ -591,0 +742 @@
 +  if not vrInputAllowed() then return end
-@@ -597,0 +741 @@
+@@ -597,0 +749 @@
 +  if not vrInputAllowed() then return end
-@@ -603,0 +748 @@
+@@ -603,0 +756 @@
 +  if not vrInputAllowed() then return end
-@@ -609,0 +755 @@
+@@ -609,0 +763 @@
 +  if not vrInputAllowed() then return end
-@@ -634,0 +781 @@
+@@ -634,0 +789 @@
 +  if not vrInputAllowed() then return end
-@@ -657,0 +805 @@
+@@ -657,0 +813 @@
 +  if not vrInputAllowed() then return end
-@@ -667,0 +816 @@
+@@ -667,0 +824 @@
 +  if not vrInputAllowed() then return end
-@@ -677,0 +827 @@
+@@ -677,0 +835 @@
 +  if not vrInputAllowed() then return end
-@@ -687,0 +838 @@
+@@ -687,0 +846 @@
 +  if not vrInputAllowed() then return end
-@@ -720,0 +872 @@
+@@ -720,0 +880 @@
 +  if not vrInputAllowed() then return end
-@@ -734,0 +887 @@
+@@ -734,0 +895 @@
 +  if not vrInputAllowed() then return end
-@@ -745,0 +899 @@
+@@ -745,0 +907 @@
 +  if not vrInputAllowed() then return end
-@@ -822 +976 @@
+@@ -822 +984 @@
 -    -- update dt
 +    -- The previous xrWaitFrame supplies the fixed VR simulation interval.
-@@ -823,0 +978 @@
+@@ -823,0 +986 @@
 +    if VRRuntime.isFramePaced() then dt = VRRuntime.frameDelta(dt) end
-@@ -836 +991,5 @@
+@@ -836 +999,5 @@
 -      if paced then
 +      if VRRuntime.isFramePaced() then
 +        -- xrWaitFrame already paced this frame; do not add window VSync or

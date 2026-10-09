@@ -32,15 +32,37 @@ The Frame controller extension is enabled and suggested only when advertised.
 Menu/short View/long View implement Start/Select/recentre. A/B and left stick/
 D-pad provide normal game input. No OS keyboard injection is used.
 
+The kit's scoped `GamePresentation` adapter captures the existing `Minimap.draw`
+and `Renderer.compositeUi` output into a transparent desktop-layout surface.
+The surface is projected separately through each eye's pose/FOV over its world
+image. It follows head yaw/pitch while retaining gravity-up, so full eye roll
+does not turn identical texture coordinates into mismatched physical locations.
+Original palette zones, minimap art and menu/dialogue layout stay in the source
+compositor. Its old 20%-of-eye scale is replaced by the shared physical plane.
+Staged battles use the final original desktop composition as that plane's mono
+source after the reference hook clears its pending stereo pair.
+
+Within an actual XR draw only, the adapter caches `Player:pose()` once and
+restores the original method at draw end. The pinned implementation advances
+surf bob and spinner timers inside `pose`; both eye passes now see the same
+result. Flat rendering, updates and NPC pose methods remain unchanged. This
+correctness fix is not evidence of a stationary-scene performance improvement.
+
+Optional `POKEPORT_VR_CAMERA_SETBACK_METERS` (0–3, default 0) translates ABOVE
+and third-person eye/focus backward along the existing view direction, preserving
+orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The 0.75 m
+comparison value is explicitly provisional. Native recommended eye dimensions
+remain the default; no lower resolution has been adopted.
+
 | Gate | Evidence | State |
 | --- | --- | --- |
 | Native source and ABI | ARM64 bridge/runtime builds; Lua integration tests; ELF/closure/ABI receipts | Host passed |
 | GPU Canvas copy | Baseline fails the new OpenXR-origin test; corrected pinned LÖVE/Xvfb pixels, MSAA, renderbuffer, scale/state/type tests pass | Host passed; corrected device check pending |
 | Flat game and real save | Red Pallet Town; copied Yellow Continue at Pewter City (22,19), voxel render | Host passed |
-| OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes, 1,588 logged submissions; wearer confirmed clear patterns. Old dump comparison masked GL origin error | Session operation passed; corrected image orientation pending |
-| Actual game on Frame | Copied Yellow save at Pewter City (22,19): native flat render; focused VR run with 300 submissions and no bridge error | Short run passed; settled stereo-eye capture pending |
+| OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes; corrected source/dump pixels match. Edge labels were outside the visible lens area | Session/copy passed; orientation established by subsequent game wear |
+| Actual game on Frame | Copied Yellow save at Pewter City (22,19): corrected native run captured distinct world eyes after 500 submissions; wearer confirmed upright/aligned imagery | Short run/capture passed; performance unaccepted |
 | Physical input and camera modes | A/B, stick, Menu, View/recentre, launcher selection and voxel Options | Pending wearer |
-| Presentation/comfort | Wearer rejected inversion, scale and alignment. Host correction tests cover 0/90/180 recenter, full roll through actual voxel matrices, IPD-preserving lean clamp and rendered mono projections | Rejected on old build; corrected wearer gate pending |
+| Presentation/comfort | Wearer confirmed corrected upright/aligned world, but rejected closeness, hidden HUD and jitter. New host tests cover actual minimap/Renderer/finishStereo composition, rolls 0/30/90/-45, shared battle plane and CameraMode setback | HUD/setback pending wearer; comfort/performance unaccepted |
 | Audio, sustained performance, sleep/resume | Gameplay session and power-button sleep/recovery | Pending device/wearer |
 
 The ROM-free color probe submits whenever OpenXR says `shouldRender`; an
@@ -52,10 +74,17 @@ ROMs, caches and saves are excluded from every distributable kit manifest.
 The user's Mac Yellow save and backup are snapshotted and hash-checked without
 modifying their original bytes, timestamps or permissions.
 
-Known limits: battles and dialogue retain the reference mono presentation;
-current upstream Gen 2/3 and arbitrary Mac mods are outside this pinned port.
+Known limits: staged battles retain the reference mono scene rendered on a
+physical screen; current upstream Gen 2/3 and arbitrary Mac mods are outside this pinned port.
 No new comfort/settings UI, hand interaction, haptic confirmation or full
 campaign acceptance has been established.
+
+The corrected `0e9b122` world capture reported a 27.78 ms runtime period, but
+capture/readback was enabled and no clean timing interval completed. This is
+not a performance baseline. A subsequent 1024-square diagnostic remained in
+standby before its driver began; it produced no measurement and was stopped.
+The normal title shortcut and empty environment were restored afterwards.
+No lower-resolution default or measured resolution benefit has been adopted.
 
 ## Device verification on 2026-10-09
 
@@ -96,3 +125,31 @@ that exported their values and executed the unchanged launcher through Steam.
 Normal play must use `tools/LAUNCH-STEAM-FRAME.sh` with no test driver or dump
 settings. The devkit's empty `env` argument does not clear an old environment
 file; clear this title's file explicitly when restoring normal play.
+
+### Runtime foveation negotiation (effectiveness awaiting device proof)
+
+The Linux bridge requests a medium `XR_FB_foveation_configuration` profile when
+`XR_FB_foveation` and `XR_FB_swapchain_update_state` are advertised. The default
+`POKEPORT_XR_FOVEATION=eye` also enables `XR_META_foveation_eye_tracked` when
+available, checks the system property, and chains its eye-tracked profile request.
+`fixed` requests medium fixed foveation; `off` provides a comparable full-rate
+control. Rejected eye profiles fall back to fixed; rejected swapchain creation or
+updates recreate **both** eyes without foveation. Profile handles are destroyed
+once the runtime has copied their parameters, or on teardown after failure.
+Native recommended eye dimensions are unchanged.
+
+The OpenGL swapchain foveation create flags are zero. This is a legal generic
+request; the bridge does not claim QCOM scaled-bin support or pass Vulkan FDM
+flags through an OpenGL binding. Frame's current Zink GL inventory has no
+`GL_QCOM_texture_foveated`. Valve's implicit Vulkan FDM layer may inject density
+maps into underlying matching-size render passes. This route needs actual
+`FDM_DEBUG` evidence of attachment to LÖVE's **source eye scene passes**, plus
+comparable timing; an accepted profile or foveated final copy proves neither.
+The bridge's `status()` exposes `foveationAvailable`, `eyeFoveationSupported`,
+`foveationRequested`, `foveationApplied`, `foveationMessage`, and
+`foveationSourceShading`. `Applied` means both OpenXR updates succeeded;
+source shading remains explicitly `unverified-runtime-injection`.
+
+Protocol details follow the Khronos [swapchain foveation create flags](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSwapchainCreateFoveationFlagBitsFB.html),
+[level profile chain](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFoveationLevelProfileCreateInfoFB.html),
+and [profile lifetime](https://registry.khronos.org/OpenXR/specs/1.1/man/html/xrDestroyFoveationProfileFB.html).

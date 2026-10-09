@@ -15,6 +15,22 @@ end
 
 function Panel.reset() anchor = nil end
 
+function Panel.placement(views, followPitch)
+  local first, second = views[1], views[2]
+  local fx, fy, fz = rotate(first.orientation, 0, 0, -1)
+  local horizontal = math.sqrt(fx * fx + fz * fz)
+  local rx, rz = 1, 0
+  if horizontal > 1e-6 then rx, rz = -fz / horizontal, fx / horizontal end
+  if not followPitch then fx, fy, fz = rz, 0, -rx end
+  return {
+    x = (first.position.x + second.position.x) / 2 + fx * DISTANCE,
+    y = (first.position.y + second.position.y) / 2 + fy * DISTANCE,
+    z = (first.position.z + second.position.z) / 2 + fz * DISTANCE,
+    rx = rx, rz = rz,
+    ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy,
+  }
+end
+
 -- Exposed geometry is also used by the GPU path. Homogeneous positions retain
 -- perspective-correct texture interpolation when viewing the panel obliquely.
 function Panel.vertices(view, placement, width, height)
@@ -29,9 +45,9 @@ function Panel.vertices(view, placement, width, height)
     local x = (uv[1] - 0.5) * width
     local y = (0.5 - uv[2]) * height
     local ex, ey, ez = rotate(inverse,
-      placement.x + placement.rx * x - p.x,
-      placement.y + y - p.y,
-      placement.z + placement.rz * x - p.z)
+      placement.x + placement.rx * x + (placement.ux or 0) * y - p.x,
+      placement.y + (placement.uy or 1) * y - p.y,
+      placement.z + placement.rz * x + (placement.uz or 0) * y - p.z)
     local w = -ez
     result[#result + 1] = {
       (2 * ex - (r + l) * w) / (r - l),
@@ -42,21 +58,7 @@ function Panel.vertices(view, placement, width, height)
   return result
 end
 
-function Panel.render(source, views)
-  assert(views and views[1] and views[2], "mono panel requires both frame views")
-  local first, second = views[1], views[2]
-  if not anchor then
-    local fx, _, fz = rotate(first.orientation, 0, 0, -1)
-    local length = math.sqrt(fx * fx + fz * fz)
-    if length < 1e-6 then fx, fz, length = 0, -1, 1 end
-    fx, fz = fx / length, fz / length
-    anchor = {
-      x = (first.position.x + second.position.x) / 2 + fx * DISTANCE,
-      y = (first.position.y + second.position.y) / 2,
-      z = (first.position.z + second.position.z) / 2 + fz * DISTANCE,
-      rx = -fz, rz = fx,
-    }
-  end
+local function draw(source, view, target, placement, overlay)
   local sw, sh = source:getDimensions()
   -- Fit tall screens too, preserving the entire original desktop layout.
   local width = math.min(WIDTH, WIDTH * sw / sh)
@@ -78,11 +80,23 @@ function Panel.render(source, views)
     love.graphics.setColorMask(true, true, true, true)
     love.graphics.setDepthMode()
     love.graphics.setMeshCullMode("none")
-    love.graphics.setBlendMode("replace", "premultiplied")
+    love.graphics.setBlendMode(overlay and "alpha" or "replace", "premultiplied")
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setShader(shader)
     mesh:setTexture(source)
-    for i, view in ipairs(views) do
+    love.graphics.setCanvas(target)
+    if not overlay then love.graphics.clear(0, 0, 0, 1) end
+    mesh:setVertices(Panel.vertices(view, placement, width, height))
+    love.graphics.draw(mesh)
+  end)
+  love.graphics.pop()
+  if not ok then error(err, 0) end
+end
+
+function Panel.render(source, views)
+  assert(views and views[1] and views[2], "mono panel requires both frame views")
+  if not anchor then anchor = Panel.placement(views, false) end
+  for i, view in ipairs(views) do
       local w, h = assert(view.width), assert(view.height)
       local target = targets[i]
       if not target or target:getWidth() ~= w or target:getHeight() ~= h then
@@ -90,15 +104,15 @@ function Panel.render(source, views)
         target = love.graphics.newCanvas(w, h, { dpiscale = 1, format = "rgba8" })
         targets[i] = target
       end
-      love.graphics.setCanvas(target)
-      love.graphics.clear(0, 0, 0, 1)
-      mesh:setVertices(Panel.vertices(view, anchor, width, height))
-      love.graphics.draw(mesh)
-    end
-  end)
-  love.graphics.pop()
-  if not ok then error(err, 0) end
+      draw(source, view, target, anchor, false)
+  end
   return targets[1], targets[2]
+end
+
+-- HUD follows yaw/pitch, stays level with gravity, and is projected with the
+-- full eye pose (including roll). Transparent pixels leave the world intact.
+function Panel.composite(source, views, eyeIndex, target)
+  draw(source, views[eyeIndex], target, Panel.placement(views, true), true)
 end
 
 function Panel.release()

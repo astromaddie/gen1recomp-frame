@@ -9,6 +9,9 @@ dialogue and battles keep the reference UI. Flat fallback screens are rendered
 onto a shared 1.9 m screen at 2 m through each eye's projection, preserving
 aspect ratio and binocular alignment. This port preserves the existing camera
 and settings interfaces.
+The existing minimap, dialogue and menu artwork is collected into a transparent
+surface and projected per eye over the world. Staged battles use the completed
+original battle screen on the shared plane instead of filling both eye textures.
 Physical controller behavior, comfort, sustained performance and sleep/resume
 still require device and worn acceptance.
 
@@ -60,6 +63,11 @@ setting is preserved, including OFF.
 Custom Mac mods are not automatically carried into this pinned assembly. A
 copied save can show the game's existing mod load report before Continue.
 
+`POKEPORT_VR_CAMERA_SETBACK_METERS` optionally moves ABOVE and third-person
+cameras back along their existing viewing direction (0–3 m, default 0).
+POV, head tracking and the 48 pixels/metre world scale remain unchanged.
+The first comparison uses 0.75 m; that is a trial value, not an accepted default.
+
 ## Verification
 
 ARM64 native builds, Runtime/main integration tests and actual GPU Canvas copy
@@ -80,8 +88,19 @@ old source/dump pixel comparison incorrectly interpreted raw OpenGL rows as
 top-left and did not prove compositor orientation. The
 native game restored the copied Yellow save in flat mode and completed a short
 focused VR saved-scene run with 300 projection submissions and no bridge error.
-The wearer subsequently rejected the game presentation as inverted, scaled
-and misaligned. Source corrections have passed host tests; corrected device
-captures and wearer acceptance remain required. This is an unaccepted prototype.
+After the origin/pose correction, the wearer confirmed upright imagery and
+binocular alignment, but reported excessive closeness, an inaccessible HUD and
+very low/jittery frame rate. The HUD/battle projection and configurable camera
+setback have passed host render tests and still require wearer verification.
+Native recommended resolution remains unchanged. Performance remains unresolved;
+this is an unaccepted prototype.
 Current device evidence and remaining gates are recorded in
 [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).
+
+Foveation profile negotiation is implemented without reducing native eye
+resolution. It requests medium eye-tracked foveation where advertised, with a
+fixed-profile fallback and full-rate recovery if the GL request is rejected.
+`POKEPORT_XR_FOVEATION=off` disables the request for comparison. Whether Valve's
+underlying Vulkan injection foveates the LÖVE scene passes remains unverified;
+no frame-rate improvement is claimed. See [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md)
+for the API/effectiveness distinction and device acceptance gate.

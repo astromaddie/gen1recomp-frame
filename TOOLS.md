@@ -99,6 +99,8 @@ read the pinned player-local voxel renderer; they do not alter it or need ROMs:
 POKEPORT_XRBRIDGE=fake luajit integration/tests/presentation_test.lua \
   integration/src/vr /path/to/DramaticShapeVoxelMod
 POKEPORT_XRBRIDGE=fake luajit integration/tests/runtime_test.lua integration/src/vr/Runtime.lua
+POKEPORT_XRBRIDGE=fake luajit integration/tests/camera_setback_test.lua \
+  integration/src/vr /path/to/DramaticShapeVoxelMod
 POKEPORT_VR_REQUIRED=1 luajit integration/tests/main_overlay_test.lua /path/to/private-local-assembly/game/main.lua
 luajit integration/tests/probe_policy_test.lua integration/probe/main.lua
 ```
@@ -119,3 +121,35 @@ For the rendered mono regression, set `POKEPORT_TEST_KIT` to this checkout,
 pixel offsets and scale in asymmetric eye images are expected: the test
 checks that both projections reconstruct the same upright physical plane.
 These host checks do not substitute for corrected Frame/wearer acceptance.
+
+Run `love integration/tests/hud_projection` under the same LÖVE/Xvfb runtime
+with `POKEPORT_TEST_KIT`, `POKEPORT_TEST_ENGINE`, `POKEPORT_TEST_VOXEL`,
+`POKEPORT_TEST_OUTPUT` and `POKEPORT_XRBRIDGE=fake`. It executes the pinned
+Minimap, Renderer, Player pose and finishStereo source, records the original
+texture-space placement mismatch, and checks physical HUD/dialogue correspondence
+at several rolls plus the staged battle dispatch and scoped method restoration.
+The map/dialogue colors are analytic fixtures; game artwork is not included.
+
+The host foveation protocol test compiles the actual bridge translation unit and
+uses strict XR callbacks to validate profile chains, unchanged 1728² targets,
+eye/fixed/off/unsupported cases, second-eye failures, symmetric full-rate recovery,
+and handle cleanup. This is protocol proof, not a GPU performance measurement:
+
+```sh
+docker run --rm --platform linux/arm64 -v "$PWD:/kit:ro" \
+  gen1recomp-frame-builder:latest bash -c '
+  set -e
+  g++ -std=c++17 -O1 -DXRBRIDGE_LOVE_ABI_11_5=1 \
+    -I/opt/openxr/include -I/usr/include/luajit-2.1 \
+    -I/opt/love-11.5/src -I/opt/love-11.5/src/modules \
+    /kit/integration/tests/native_foveation.cpp -L/opt/love/lib \
+    -llove-11.5 -lluajit-5.1 /opt/openxr/lib/libopenxr_loader.a \
+    -lGL -lX11 -ldl -pthread -o /tmp/foveation-test
+  LD_LIBRARY_PATH=/opt/love/lib /tmp/foveation-test'
+```
+
+For Frame comparison, preserve native eye dimensions and scene, use
+`POKEPORT_XR_FOVEATION=eye` versus `off`, and collect `FDM_DEBUG` output from the
+Valve injection layer. Verify source eye render-pass attachment before attributing
+any timing difference to foveated rendering. Runtime API acceptance alone is not
+sufficient. `fixed` is a diagnostic fallback, not an eye-tracking claim.

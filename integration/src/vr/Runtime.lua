@@ -273,7 +273,14 @@ local state = {
   pendingSubmit = nil,
   lastError = nil,
   nativeStatus = nil,
+  cameraSetbackMeters = 0,
 }
+
+do
+  local ok, value = pcall(function() return os.getenv("POKEPORT_VR_CAMERA_SETBACK_METERS") end)
+  value = ok and tonumber(value) or 0
+  if finiteNumber(value) then state.cameraSetbackMeters = math.max(0, math.min(3, value)) end
+end
 
 local function setError(prefix, value)
   state.lastError = prefix .. ": " .. errorText(value)
@@ -832,6 +839,18 @@ end
 
 function Runtime.views(baseCamera, aspect)
   local camera = type(baseCamera) == "table" and baseCamera or {}
+  if state.enabled and state.cameraSetbackMeters > 0
+     and (camera.mode == "above" or camera.mode == "third") then
+    local center = defaultCenter(camera)
+    local focus = defaultFocus(camera, center)
+    local forward = normalizedVector({x=focus.x-center.x,y=focus.y-center.y,z=focus.z-center.z},
+      {x=0,y=0,z=-1})
+    local offset = state.cameraSetbackMeters * WORLD_PIXELS_PER_METER
+    camera = copyTable(camera)
+    camera.eye = {x=center.x-forward.x*offset,y=center.y-forward.y*offset,z=center.z-forward.z*offset}
+    camera.position = camera.eye
+    camera.focus = {x=focus.x-forward.x*offset,y=focus.y-forward.y*offset,z=focus.z-forward.z*offset}
+  end
   aspect = validAspect(aspect, camera)
   if state.enabled then ensureStarted() end
 
@@ -841,6 +860,13 @@ function Runtime.views(baseCamera, aspect)
     if bridgeLeft and bridgeRight then left, right = bridgeLeft, bridgeRight end
   end
   return left, right
+end
+
+function Runtime.compositeHud(source, target, eyeIndex)
+  if not state.bridgeActive or not state.frameViews then return false end
+  monoPanel = monoPanel or require("src.vr.MonoPanel")
+  monoPanel.composite(source, state.frameViews, eyeIndex, target)
+  return true
 end
 
 local function canvasValue(value)
