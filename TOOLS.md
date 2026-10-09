@@ -31,13 +31,13 @@ external directory, then assemble into another fresh external directory:
 python3 tools/fetch-private-sources.py /path/to/private-sources
 python3 tools/assemble-local.py \
   --engine /path/to/private-sources/gen1recomp \
-  --voxel /path/to/private-sources/DramaticShapeVoxelMod \
+  --voxel /path/to/private-sources/DRAMALESS_SHAPE \
   --kit /path/to/gen1recomp-frame \
   --output /path/to/private-local-assembly
 ```
 
 The assembly checks both revisions and clean checkouts, applies the native
-`integration/main.lua.patch` plus `integration/src`, and writes a file hash
+`integration/main.lua.patch`, `integration/dramaless.patch`, plus `integration/src`, and writes a file hash
 manifest. Keep it outside both this tools tree and the distributable package.
 The game already supports player-provided ROM import through its file picker or
 `POKEPORT_IMPORT_ROM=/absolute/path/to/legally-obtained-rom`; the variable is
@@ -97,13 +97,11 @@ read the pinned player-local voxel renderer; they do not alter it or need ROMs:
 
 ```sh
 POKEPORT_XRBRIDGE=fake luajit integration/tests/presentation_test.lua \
-  integration/src/vr /path/to/DramaticShapeVoxelMod
+  integration/src/vr /path/to/private-local-assembly/game/mods/DRAMALESS_SHAPE
 POKEPORT_XRBRIDGE=fake luajit integration/tests/runtime_test.lua integration/src/vr/Runtime.lua
 luajit integration/tests/telemetry_test.lua integration/src/vr/Telemetry.lua
 luajit integration/tests/runtime_telemetry_test.lua integration/src/vr/Runtime.lua
 luajit integration/tests/vr_telemetry_driver_test.lua integration/tests/vr_telemetry_driver.lua
-POKEPORT_XRBRIDGE=fake luajit integration/tests/camera_setback_test.lua \
-  integration/src/vr /path/to/DramaticShapeVoxelMod
 POKEPORT_VR_REQUIRED=1 luajit integration/tests/main_overlay_test.lua /path/to/private-local-assembly/game/main.lua
 luajit integration/tests/probe_policy_test.lua integration/probe/main.lua
 ```
@@ -177,3 +175,18 @@ Full eye images must agree within 0.02 aggregate RGB; max/mean channel errors
 and nonzero pixel counts are also reported. `QA_CONTROL=1` compares off/off
 to isolate draw-time animation or state changes.
 Private art and screenshots never belong in the distributable kit.
+
+## DRAMALESS replacement checks
+
+Use `integration/tests/dramaless_scene_driver.lua` with the private new assembly
+and an isolated copy of player data. It captures one culled stereo pair (no
+whole-map comparison run), asserts two actual VoxelScene passes and matching
+source GPU telemetry scopes, checks once-per-frame glint/player animation,
+and steps R.DIST through the existing Options row. `QA_MAP`, `QA_X`, `QA_Y`,
+`QA_YAW`, `QA_PITCH`, and `QA_ROLL` select the host scene/pose. Captures use
+1728-square eyes. Keep these screenshots and player data outside the kit.
+
+The continuous device driver `vr_telemetry_driver.lua` calls the updated
+DRAMALESS `saved_scene.lua`, prints its initial measurement marker, and yields
+forever afterward while CPU/GPU collection continues. Only the user ends the
+settings-tuning session; do not add a diagnostic auto-quit.

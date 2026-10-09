@@ -22,14 +22,12 @@ return function(game)
     U.wait(10)
   end
   assert(game.stack:top() == ow, "Load report did not return to overworld")
-  local mod = game.mods and game.mods.exports and game.mods.exports.DRAMATIC_SHAPE
-  assert(mod and mod.lib, "Dramatic Shape missing")
+  local mod = game.mods and game.mods.exports and game.mods.exports.DRAMALESS_SHAPE
+  assert(mod and mod.lib, "DRAMALESS Shape missing")
   local V = mod.lib
-  local Camera = V.require("CameraMode")
   local Voxel = V.require("VoxelState")
   local Voxel3D = V.require("Voxel3D")
   local Pipelines = require("src.render.Pipelines")
-  Camera.setting:sync("above")
   assert(Voxel3D.available())
   assert(Pipelines.setLevel("voxel", 3) == 3)
   for _ = 1, 600 do
@@ -37,7 +35,7 @@ return function(game)
     if Pipelines.worldPipeline() == "voxel" and Voxel.active() and Voxel.ready then break end
   end
   assert(Pipelines.worldPipeline() == "voxel" and Voxel.active() and Voxel.ready)
-  U.log("voxel-scene", ow.map.id, Camera.mode(), "ready", Voxel.ready)
+  U.log("voxel-scene", ow.map.id, require("src.vr.DramalessStereo").mode(V), "ready", Voxel.ready)
   assert(U.shot(game, (os.getenv("SHOT_DIR") or "/tmp") .. "/yellow-slot1-voxel.png"))
   U.wait(120) -- Leave time for a delayed one-shot native eye capture.
 end

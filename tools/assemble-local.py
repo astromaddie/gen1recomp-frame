@@ -8,7 +8,7 @@ import shutil
 import subprocess
 
 ENGINE_REVISION = '1d2c421ff47f487d836589d38c6209b031bbce91'
-VOXEL_REVISION = '38d8238785716b82af2d29fb9291d01d316e16f7'
+VOXEL_REVISION = '97ca3e1f8f7c3aa0b3e671db497076150f494051'
 FORBIDDEN_SUFFIXES = {'.gb', '.gbc', '.gba', '.sav', '.srm', '.dll', '.exe', '.so', '.dylib'}
 
 
@@ -31,7 +31,7 @@ def copy_tracked(source, destination, revision, engine=False):
                                'tools/rom_manifest_yellow.json',
                            } or name.startswith(('src/', 'data/', 'assets/', 'tools/save-editor/'))):
             continue
-        if not engine and not (name in {'main.lua', 'manifest.json', 'mod.card', 'README.md', 'LICENSE-POLYMATIC-LABS.md'} or
+        if not engine and not (name in {'main.lua', 'manifest.json', 'mod.card', 'README.md', 'LICENSE', 'CREDITS.md'} or
                                name.startswith(('lib/', 'assets/', 'data/'))):
             continue
         if relative.suffix.lower() in FORBIDDEN_SUFFIXES or '/generated/' in '/' + name or name.startswith('assets/vr/'):
@@ -60,8 +60,9 @@ def main():
     game = output / 'game'
     game.mkdir(parents=True)
     counts = {'engine': copy_tracked(args.engine.resolve(), game, ENGINE_REVISION, True),
-              'voxel': copy_tracked(args.voxel.resolve(), game / 'mods' / 'DRAMATIC_SHAPE', VOXEL_REVISION)}
+              'voxel': copy_tracked(args.voxel.resolve(), game / 'mods' / 'DRAMALESS_SHAPE', VOXEL_REVISION)}
     subprocess.run(['patch', '-p1', '--batch', '--forward', '-i', str(kit / 'integration' / 'main.lua.patch')], cwd=game, check=True)
+    subprocess.run(['patch', '-p1', '--batch', '--forward', '-i', str(kit / 'integration' / 'dramaless.patch')], cwd=game / 'mods' / 'DRAMALESS_SHAPE', check=True)
     for overlay in (kit / 'integration' / 'src').rglob('*'):
         if overlay.is_file():
             target = game / 'src' / overlay.relative_to(kit / 'integration' / 'src')
@@ -74,7 +75,7 @@ def main():
     (output / 'LOCAL-SOURCE-METADATA.json').write_text(json.dumps({
         'engine_revision': ENGINE_REVISION, 'voxel_revision': VOXEL_REVISION,
         'file_counts': counts, 'sha256': files,
-        'distribution': 'Private local assembly; complete voxel mod is not licensed for redistribution.'
+        'distribution': 'Private local assembly; engine and DRAMALESS are MIT; player game data is excluded from the kit.'
     }, indent=2) + '\n')
     print(f'Assembled {len(files)} pinned source files into {output}')
 

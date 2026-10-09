@@ -1,0 +1,67 @@
+--- a/main.lua
++++ b/main.lua
+@@ -151,0 +152,2 @@
++    local vr = require("src.vr.DramalessStereo")
++    if vr.active(ctx) then return vr.drawWorld(V, ctx) end
+@@ -539,0 +542 @@
++mod.exports.finishVR = function() return require("src.vr.DramalessStereo").finish() end
+--- a/lib/Quality.lua
++++ b/lib/Quality.lua
+@@ -66 +66 @@
+-                                 { "1/2", "FULL", "1/3", "1/4" })
++                                 { "1/2", "FULL", "1/3", "1/4" }, 2)
+@@ -82 +82 @@
+-                                 { "SHORT", "FULL", "MEDIUM", "FAR" })
++                                 { "SHORT", "FULL", "MEDIUM", "FAR" }, 2)
+--- a/lib/Mat4.lua
++++ b/lib/Mat4.lua
+@@ -156,0 +157,9 @@
++-- Native XR lens angles, retaining this module's row-major GL convention.
++function Mat4.perspectiveOffAxis(left, right, up, down, near, far)
++  local l, r, t, b = math.tan(left), math.tan(right), math.tan(up), math.tan(down)
++  return { 2/(r-l), 0, (r+l)/(r-l), 0,
++           0, 2/(t-b), (t+b)/(t-b), 0,
++           0, 0, (far+near)/(near-far), 2*far*near/(near-far),
++           0, 0, -1, 0 }
++end
++
+--- a/lib/Voxel3D.lua
++++ b/lib/Voxel3D.lua
+@@ -518 +518,2 @@
+-    local eye, focus = cam.eye, cam.focus
++    local function vec(v) return {v.x or v[1], v.y or v[2], v.z or v[3]} end
++    local eye, focus = vec(cam.eye), vec(cam.focus)
+@@ -531,3 +532,10 @@
+-    Voxel3D.fovY = cam.fov
+-    local proj = Mat4.perspective(cam.fov, vw / vh,
+-                                  math.max(1, dist * 0.05), dist * 4 + 4096)
++    local proj
++    if type(cam.fov) == "table" then
++      Voxel3D.fovY = cam.fov.up - cam.fov.down
++      proj = Mat4.perspectiveOffAxis(cam.fov.left, cam.fov.right,
++        cam.fov.up, cam.fov.down, math.max(1, dist * 0.05), dist * 4 + 4096)
++    else
++      Voxel3D.fovY = cam.fov
++      proj = Mat4.perspective(cam.fov, vw / vh,
++        math.max(1, dist * 0.05), dist * 4 + 4096)
++    end
+@@ -542 +550 @@
+-    return Mat4.mul(proj, Mat4.lookAt(eye, focus, cam.up or { 0, 1, 0 }))
++    return Mat4.mul(proj, Mat4.lookAt(eye, focus, vec(cam.up or { 0, 1, 0 })))
+--- a/lib/FirstPerson.lua
++++ b/lib/FirstPerson.lua
+@@ -146,0 +147,7 @@
++local trackedEye, savedRig
++-- Host-only scope: billboard identity follows the tracked eye, while the
++-- normal desktop rig and its update remain unchanged outside this pass.
++function FirstPerson.adoptTrackedEye(camera)
++  if camera then savedRig, trackedEye, rig = rig, camera, camera
++  else rig, trackedEye, savedRig = savedRig, nil, nil end
++end
+@@ -612,0 +620,6 @@
++  if trackedEye then
++    Voxel3D.camera = trackedEye
++    local e = FirstPerson.blendEased()
++    return trackedEye, cx + ((me and me.px + 8 or cx) - cx) * e,
++      cy + ((me and me.py + 8 or cy) - cy) * e
++  end

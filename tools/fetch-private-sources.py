@@ -6,7 +6,7 @@ import subprocess
 
 REPOSITORIES = {
     'gen1recomp': ('https://github.com/polymathiclabs/gen1recomp.git', '1d2c421ff47f487d836589d38c6209b031bbce91'),
-    'DramaticShapeVoxelMod': ('https://github.com/polymathiclabs/DramaticShapeVoxelMod.git', '38d8238785716b82af2d29fb9291d01d316e16f7'),
+    'DRAMALESS_SHAPE': ('https://github.com/artyrambles/DRAMALESS_SHAPE.git', '97ca3e1f8f7c3aa0b3e671db497076150f494051'),
 }
 
 parser = argparse.ArgumentParser()

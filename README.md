@@ -1,15 +1,15 @@
 # Gen1Recomp for Steam Frame
 
 Native ARM64 Linux / OpenXR port kit for Pokémon Red, Blue and Yellow. It adapts
-the existing Polymatic Labs voxel VR fork to standalone Steam Frame, using a
+the pinned MIT engine and public DRAMALESS_SHAPE 2.0.4 renderer to standalone Steam Frame, using a
 pinned LÖVE 11.5 runtime and SteamLinuxRuntime_4-arm64. No PC streaming is needed.
 
-The overworld uses the reference mod's tracked stereo cameras. Launcher, menus,
+The overworld uses an original host adapter around DRAMALESS's renderer, with tracked stereo cameras. Launcher, menus,
 dialogue and battles keep the reference UI. Flat fallback screens are rendered
 onto a shared 1.9 m screen at 2 m through each eye's projection, preserving
 aspect ratio and binocular alignment. This port preserves the existing camera
 and settings interfaces.
-The existing minimap, dialogue and menu artwork is collected into a transparent
+The existing dialogue and menu artwork is collected into a transparent
 surface and projected per eye over the world. Staged battles use the completed
 original battle screen on the shared plane instead of filling both eye textures.
 Physical controller behavior, comfort, sustained performance and sleep/resume
@@ -20,11 +20,11 @@ still require device and worn acceptance.
 The engine/bridge base is the MIT-licensed
 [Polymatic engine revision](https://github.com/polymathiclabs/gen1recomp/tree/1d2c421ff47f487d836589d38c6209b031bbce91).
 The player-local voxel source is
-[Dramatic Shape revision](https://github.com/polymathiclabs/DramaticShapeVoxelMod/tree/38d8238785716b82af2d29fb9291d01d316e16f7).
+[DRAMALESS_SHAPE revision](https://github.com/artyrambles/DRAMALESS_SHAPE/tree/97ca3e1f8f7c3aa0b3e671db497076150f494051).
 This is a Red/Blue/Yellow port of that fork, rather than the current upstream
 Gen 2/3 engine. The newer upstream launcher has separate proprietary terms.
-The complete voxel mod has no broad redistribution license; the kit fetches it
-only for a private local assembly and excludes it from the release archive.
+DRAMALESS is MIT-licensed. The kit fetches the pinned source into a private local
+assembly, carries its license there, and excludes the full mod from the kit archive.
 
 No ROMs, extracted game data, or saves are included in Git or release packages.
 Your original Mac player data is independent of the Frame data directory.
@@ -57,7 +57,12 @@ Select; holding View for one second recentres the VR camera. In the launcher,
 A clicks a tab/button and Menu plays the selected imported game.
 These bindings are source-implemented; physical input acceptance remains open.
 
-The existing voxel Options menu selects its ABOVE, third-person and POV modes.
+The existing VOXEL Options row selects elevated angles (ABOVE), 1ST (POV),
+and 3RD. DRAMALESS owns its existing free-camera controls and third-person
+collision boom; these differ from the previous private mod. It has no minimap.
+RES and R.DIST start at FULL; subsequent user changes are preserved.
+DRAMALESS currently uses RES for sky quality rather than reducing its scene
+target. Native XR eye dimensions remain the runtime recommendation.
 Fresh VR player data defaults to voxel level 35; an explicit existing voxel
 setting is preserved, including OFF.
 Custom Mac mods are not automatically carried into this pinned assembly. A
@@ -70,6 +75,10 @@ The wearer accepted 0.75 m in the Pewter City comparison. Explicit zero restores
 the original camera distance. HUD readability remains unverified.
 
 ## Verification
+
+Historical Frame/wearer results below concern the previous renderer. DRAMALESS
+replacement acceptance is recorded separately in VR_ARCHITECTURE.md; earlier
+performance samples do not establish its performance or battle compatibility.
 
 ARM64 native builds, Runtime/main integration tests and actual GPU Canvas copy
 tests under LÖVE/Xvfb passed. The corrected native test checks OpenXR's

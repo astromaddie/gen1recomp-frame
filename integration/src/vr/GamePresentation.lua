@@ -25,15 +25,24 @@ local function sceneName(game, lib)
       and game.overworld.map.id
   local cameraMode = "unknown"
   if lib then
-    local ok, mode = pcall(function() return lib.require("CameraMode").mode() end)
+    local ok, mode = pcall(function()
+      if game.mods.exports.DRAMALESS_SHAPE then return require("src.vr.DramalessStereo").mode(lib) end
+      return lib.require("CameraMode").mode()
+    end)
     if ok and type(mode) == "string" then cameraMode = mode end
   end
-  return tostring(mapId or "unknown") .. "/" .. cameraMode
+  local identity = tostring(mapId or "unknown") .. "/" .. cameraMode
+  if lib and game.mods.exports.DRAMALESS_SHAPE then
+    local quality = lib.require("Quality")
+    identity = identity .. "/rdist=" .. tostring(quality.renderDistanceSetting:get())
+      .. "/res=" .. tostring(quality.setting:get())
+  end
+  return identity
 end
 
 local function library(game)
   local exports = game and game.mods and game.mods.exports
-  local mod = exports and exports.DRAMATIC_SHAPE
+  local mod = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
   return mod and mod.lib
 end
 
@@ -54,6 +63,9 @@ end
 function Presentation.beginDraw(game)
   Presentation.endDraw()
   frame = nil
+  if game and game.mods and game.mods.exports and game.mods.exports.DRAMALESS_SHAPE then
+    require("src.vr.DramalessStereo").beginFrame()
+  end
   if not Runtime.isBridgeActive() or not Runtime.shouldRender() then return end
   local lib = library(game)
   if not lib then return end
@@ -62,7 +74,8 @@ function Presentation.beginDraw(game)
   if telemetry then telemetry.setScene(scene) end
   drawDistance = drawDistance or require("src.vr.DrawDistance")
   drawDistance.begin(lib)
-  local minimap = lib.require("Minimap")
+  local minimap
+  if not game.mods.exports.DRAMALESS_SHAPE then minimap = lib.require("Minimap") end
   local w,h = love.graphics.getDimensions()
   if love.graphics.getPixelDimensions then w,h = love.graphics.getPixelDimensions() end
   if not hud or hud:getWidth() ~= w or hud:getHeight() ~= h then
@@ -74,7 +87,7 @@ function Presentation.beginDraw(game)
   love.graphics.setCanvas(hud)
   love.graphics.clear(0,0,0,0)
   love.graphics.pop()
-  frame = {minimap=minimap,drawMinimap=minimap.draw,source=hud,width=w,height=h,
+  frame = {minimap=minimap,drawMinimap=minimap and minimap.draw,source=hud,width=w,height=h,
     telemetry=telemetry,scene=scene,sourceEye=0}
   if telemetry then
     local voxelScene = lib.require("VoxelScene")
@@ -117,12 +130,17 @@ function Presentation.beginDraw(game)
       canvas=function() return hud end,
     })
   end
-  minimap.draw = frame.captureMinimap
+  if minimap then minimap.draw = frame.captureMinimap end
 end
 
 local function stagedBattle(game)
   local lib = library(game)
   if not lib then return false end
+  if game.mods.exports.DRAMALESS_SHAPE then
+    local host = game.mods.exports.DRAMALESS_SHAPE.voxel2DBattleHost
+    -- The public mod stages battles through the engine world override.
+    return host and host.session and host.session.presented == true
+  end
   local shot = lib.require("OverworldBattle").shot()
   return shot and shot.canvas ~= nil
 end

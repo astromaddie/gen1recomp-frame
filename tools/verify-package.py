@@ -61,7 +61,7 @@ def allowlisted(rel):
                'RUNTIME-IMAGE.json', 'PACKAGE-METADATA.json', 'SHA256SUMS',
                'XRBRIDGE-BUILD.json', 'XRBRIDGE-DEPS.txt', 'xrbridge.so',
                'vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
-               'vrbridge/Telemetry.h', 'vrbridge/README.md', 'integration/main.lua.patch', 'sources/SHA256SUMS',
+               'vrbridge/Telemetry.h', 'vrbridge/README.md', 'integration/main.lua.patch', 'integration/dramaless.patch', 'sources/SHA256SUMS',
                'runtime/bin/love', 'runtime/dependency-closure.txt'}:
         return True
     if rel.startswith('tools/'):

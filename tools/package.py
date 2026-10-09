@@ -74,7 +74,7 @@ def main():
     global PACKAGE_OUTPUT_ROOT
     PACKAGE_OUTPUT_ROOT = output
     inventory = {}
-    for rel in ('integration/main.lua.patch', 'LICENSE-MIT-ENGINE'):
+    for rel in ('integration/main.lua.patch', 'integration/dramaless.patch', 'LICENSE-MIT-ENGINE'):
         copy_file(source / rel, output / rel, inventory)
     copy_tree(source / 'integration/src', output / 'integration/src', inventory,
               lambda rel: rel.endswith('.lua'))

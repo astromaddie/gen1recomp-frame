@@ -170,11 +170,17 @@
 +    updateVRImporterInput()
 +    return Importer:update(dt)
 +  end
+@@ -440 +570 @@
+-  local dramatic = exports and exports.DRAMATIC_SHAPE
++  local dramatic = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
 @@ -443 +573,3 @@
 -    local ok, handled, mirrorCanvas = pcall(finish)
 +    local ok, handled, mirrorCanvas = pcall(function()
 +      return require("src.vr.GamePresentation").finish(Game, finish, vrOutputCanvas)
 +    end)
+@@ -456 +588 @@
+-  local dramatic = exports and exports.DRAMATIC_SHAPE
++  local dramatic = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
 @@ -483,0 +616,6 @@
 +    if VRRuntime.isBridgeActive() and not vrVsyncDisabled
 +       and love.system and love.system.getOS() == "Linux"

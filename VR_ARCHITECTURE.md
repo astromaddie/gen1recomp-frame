@@ -13,7 +13,7 @@ The GPU boundary reverses Canvas rows: LÖVE Canvas logical top is GL row zero,
 whereas OpenXR GL images use a bottom-left origin. Diagnostic PPMs reverse
 raw glReadPixels rows to show the compositor image truthfully as top-left.
 
-The game simulates once before drawing both eyes. The existing voxel mod derives
+The game simulates once before drawing both eyes. The native host adapter derives
 each eye camera from the same frame's predicted pose/FOV. `xrWaitFrame` supplies
 pacing; successive predicted display timestamps supply simulation dt, with the
 runtime period used on first frame, resume, or invalid/nonmonotonic timestamps.
@@ -32,12 +32,13 @@ The Frame controller extension is enabled and suggested only when advertised.
 Menu/short View/long View implement Start/Select/recentre. A/B and left stick/
 D-pad provide normal game input. No OS keyboard injection is used.
 
-The kit's scoped `GamePresentation` adapter captures the existing `Minimap.draw`
-and `Renderer.compositeUi` output into a transparent desktop-layout surface.
+The kit's scoped `GamePresentation` adapter captures `Renderer.compositeUi`
+output into a transparent desktop-layout surface. Its legacy Minimap hook is
+retained only for older private assemblies; DRAMALESS has no minimap.
 The surface is projected separately through each eye's pose/FOV over its world
 image. It follows head yaw/pitch while retaining gravity-up, so full eye roll
 does not turn identical texture coordinates into mismatched physical locations.
-Original palette zones, minimap art and menu/dialogue layout stay in the source
+Original palette zones and menu/dialogue layout stay in the source
 compositor. Its old 20%-of-eye scale is replaced by the shared physical plane.
 Staged battles use the final original desktop composition as that plane's mono
 source after the reference hook clears its pending stereo pair.
@@ -54,6 +55,59 @@ orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The wear
 accepted the 0.75 m distance during the 1024-square test; explicit zero restores
 the original distance. Native recommended eye dimensions
 remain the default; no lower resolution has been adopted.
+
+## DRAMALESS source replacement (2026-10-09)
+
+Default renderer: public MIT DRAMALESS_SHAPE 2.0.4 at
+`97ca3e1f8f7c3aa0b3e671db497076150f494051`, with the unchanged pinned MIT
+engine. Assemblies contain only `mods/DRAMALESS_SHAPE`, its original MIT
+LICENSE and CREDITS, and the small native integration patch. The older private
+mod is neither copied nor required. References remain unmodified.
+
+`DramalessStereo` supplies native-size independent eye slots through the real
+upstream VoxelScene path. Small source seams add asymmetric lens projection
+and scoped FirstPerson tracked-eye adoption. Existing angle rungs map to ABOVE,
+1ST to POV, and 3RD to third-person for Runtime's unchanged setback rule.
+The public mod retains its own free-camera input and collision-boom behavior;
+its 3RD rig differs from the former private mod. Glint and Player:pose draw
+state advance once per pair. The engine update/pipeline update runs once.
+
+RES and R.DIST default to their built-in FULL rungs through schema defaults,
+without overwriting saved choices. R.DIST is the public mod's existing draw
+selection, while host culling retains its conservative union of real eye
+frusta. The current upstream RES setting controls sky detail; its world pass
+does not divide the native eye target. Both eyes use the complete recommended
+resolution. AA and other exposed settings retain the upstream implementations.
+Telemetry scene identities include `/rdist=<stored value>/res=<stored value>`
+(e.g. `-1` and `1` for FULL); GPU scopes retain that issue-time identity.
+
+Host evidence in the private `work/dramaless-qa` folder:
+
+- `above/eye-*.png`: actual Pewter City, two 1728-square source passes, one
+  glint step and player pose increment, 3.072-world-pixel runtime IPD, and two
+  source GPU scopes. Inspected upright world and continuous visible street.
+- `room-roll/eye-*.png`: actual Pewter Mart at +20 degree tracked roll; complete
+  visible room floor retained. No whole-map comparison was run.
+- `options-battle/options-*.png`: existing Options R.DIST row, FULL RES/R.DIST;
+  row API FULL -> MEDIUM -> FULL and normal cancel interaction pass.
+- `options-battle/battle-*.png`: actual public standalone arena and 2D cards
+  on the common mono plane. Initial battle presentation only, not a complete
+  combat playthrough or proof of all transition/animation compatibility.
+- `camera-modes/*.png` / `camera-modes.log`: actual ABOVE, 1ST and 3RD
+  scenes; measured 36/0/36 world-pixel setback respectively, unchanged 3.072
+  world-pixel IPD, and identical strict two-pass/state/scope checks.
+- `pure.log`: new production Voxel3D matrices pass yaw 0/90/180, full roll,
+  asymmetric lenses and IPD; Runtime, telemetry, continuous driver and main
+  integration checks pass. `unit.log`: nearby shared HUD projection and real
+  DRAMALESS mesh/frustum selection regressions pass.
+
+This is host GPU evidence (ARM64 LÖVE/Xvfb software OpenGL), not Frame GPU
+performance or wearer acceptance. Optional third-party companion/Stadium mods,
+all field effects and a full battle playthrough remain unverified. The native
+telemetry driver remains alive after its initial measurement marker so the user
+can tune settings and end the session themselves.
+
+The following device/wearer evidence predates the DRAMALESS replacement:
 
 | Gate | Evidence | State |
 | --- | --- | --- |
