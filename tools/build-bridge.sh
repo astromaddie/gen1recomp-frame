@@ -25,7 +25,7 @@ PYRESOLVE
 )"
 output_name="$(basename "$output")"
 [[ "$output_name" == xrbridge.so ]] || { echo 'Output filename must be xrbridge.so' >&2; exit 2; }
-[[ -f "$source_root/vrbridge/CMakeLists.txt" && -f "$source_root/vrbridge/xrbridge.cpp" ]] || {
+[[ -f "$source_root/vrbridge/CMakeLists.txt" && -f "$source_root/vrbridge/xrbridge.cpp" && -f "$source_root/vrbridge/Telemetry.h" ]] || {
   echo "Native bridge sources are missing under $source_root/vrbridge" >&2; exit 2;
 }
 [[ -s "$runtime_root/runtime/lib/liblove-11.5.so" ]] || {
@@ -59,7 +59,7 @@ def git(*args):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return result.stdout.strip() if result.returncode == 0 else None
 files = {}
-for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp'):
+for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp', 'vrbridge/Telemetry.h'):
     files[rel] = hashlib.sha256((root / rel).read_bytes()).hexdigest()
 status = git('status', '--porcelain=v1', '--untracked-files=all')
 print(json.dumps({'head': git('rev-parse', 'HEAD'),

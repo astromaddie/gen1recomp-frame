@@ -99,6 +99,9 @@ read the pinned player-local voxel renderer; they do not alter it or need ROMs:
 POKEPORT_XRBRIDGE=fake luajit integration/tests/presentation_test.lua \
   integration/src/vr /path/to/DramaticShapeVoxelMod
 POKEPORT_XRBRIDGE=fake luajit integration/tests/runtime_test.lua integration/src/vr/Runtime.lua
+luajit integration/tests/telemetry_test.lua integration/src/vr/Telemetry.lua
+luajit integration/tests/runtime_telemetry_test.lua integration/src/vr/Runtime.lua
+luajit integration/tests/vr_telemetry_driver_test.lua integration/tests/vr_telemetry_driver.lua
 POKEPORT_XRBRIDGE=fake luajit integration/tests/camera_setback_test.lua \
   integration/src/vr /path/to/DramaticShapeVoxelMod
 POKEPORT_VR_REQUIRED=1 luajit integration/tests/main_overlay_test.lua /path/to/private-local-assembly/game/main.lua

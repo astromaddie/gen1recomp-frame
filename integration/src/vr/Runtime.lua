@@ -7,6 +7,23 @@
 
 local Runtime = {}
 local monoPanel
+local telemetryRequested = false
+pcall(function()
+  telemetryRequested = os and os.getenv
+    and os.getenv("POKEPORT_VR_TELEMETRY") == "1" or false
+end)
+local telemetryModule
+local telemetryAttempted = false
+
+local function telemetry()
+  if not telemetryRequested then return nil end
+  if not telemetryAttempted then
+    telemetryAttempted = true
+    local ok, module = pcall(require, "src.vr.Telemetry")
+    if ok and module.isEnabled() then telemetryModule = module end
+  end
+  return telemetryModule
+end
 
 local DEFAULT_IPD = 0.064
 local DEFAULT_FOV = math.rad(90)
@@ -766,6 +783,8 @@ function Runtime.start(width, height)
     end
   end
   if state.bridgeActive then state.mode = "bridge" else state.mode = "preview" end
+  local diagnostics = telemetry()
+  if diagnostics then diagnostics.attach(state.bridge) end
   state.startedWidth = width
   state.startedHeight = height
   return true
@@ -789,11 +808,15 @@ function Runtime.beginFrame(width, height)
   state.shouldRender = true
   state.framePaced = false
   state.predictedFrameDelta = nil
+  local diagnostics = telemetry()
+  if diagnostics then diagnostics.setFrame(state.frame) end
 
   if state.bridgeActive then
     local begin = state.bridge.beginFrame
     if type(begin) == "function" then
+      local stage = diagnostics and diagnostics.beginStage("xr_begin_frame")
       local ok, first, second, third = callFunction(begin)
+      if diagnostics then diagnostics.endStage(stage) end
       if ok and first ~= nil and first ~= false then
         state.frameViews = { first, second }
         state.frameOpen = true
@@ -819,6 +842,11 @@ function Runtime.beginFrame(width, height)
     updateXrFrameClock(state.nativeStatus)
   else
     resetXrFrameClock()
+  end
+  if diagnostics then
+    local telemetryStatus = copyTable(state.nativeStatus)
+    telemetryStatus.shouldRender = state.shouldRender
+    diagnostics.recordFrame(state.frame, telemetryStatus)
   end
   return true
 end
@@ -1059,8 +1087,14 @@ function Runtime.flush()
   local pending = state.pendingSubmit
   state.pendingSubmit = nil
   if not pending then return true end
+  local diagnostics = telemetry()
+  local stage = diagnostics and diagnostics.beginStage("xr_submission")
   local ok = Runtime.submit(pending.leftCanvas, pending.rightCanvas,
                             pending.options)
+  if diagnostics then
+    diagnostics.endStage(stage)
+    if ok then diagnostics.recordSubmit() end
+  end
   refreshNativeStatus()
   return ok
 end

@@ -80,7 +80,8 @@ def main():
               lambda rel: rel.endswith('.lua'))
     copy_tree(source / 'integration/probe', output / 'probe', inventory,
               lambda rel: rel.endswith('.lua'))
-    for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp', 'vrbridge/README.md'):
+    for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
+                'vrbridge/Telemetry.h', 'vrbridge/README.md'):
         copy_file(source / rel, output / rel, inventory)
 
     kit_root = Path(__file__).resolve().parents[1]
@@ -98,7 +99,8 @@ def main():
     bridge_deps_path = bridge.with_name('xrbridge-dependency-closure.txt')
     bridge_report = json.loads(bridge_report_path.read_text())
     source_hashes = bridge_report.get('source', {}).get('files', {})
-    for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp'):
+    for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
+                'vrbridge/Telemetry.h'):
         if source_hashes.get(rel) != sha256(source / rel):
             raise SystemExit(f'bridge source changed since build: {rel}')
     if bridge_report.get('artifacts', {}).get('xrbridge.so') != sha256(bridge):

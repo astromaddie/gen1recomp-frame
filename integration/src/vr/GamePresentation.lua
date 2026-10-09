@@ -4,6 +4,32 @@ local Runtime = require("src.vr.Runtime")
 local Presentation = {}
 local frame, hud
 local drawDistance
+local telemetryResolved, telemetryRequested, telemetryModule = false, false, nil
+local function diagnosticTelemetry()
+  if not telemetryResolved then
+    telemetryResolved = true
+    pcall(function()
+      telemetryRequested = os and os.getenv
+        and os.getenv("POKEPORT_VR_TELEMETRY") == "1" or false
+    end)
+    if telemetryRequested then
+      local ok, module = pcall(require, "src.vr.Telemetry")
+      if ok and module.isEnabled() then telemetryModule = module end
+    end
+  end
+  return telemetryModule
+end
+
+local function sceneName(game, lib)
+  local mapId = game and game.overworld and game.overworld.map
+      and game.overworld.map.id
+  local cameraMode = "unknown"
+  if lib then
+    local ok, mode = pcall(function() return lib.require("CameraMode").mode() end)
+    if ok and type(mode) == "string" then cameraMode = mode end
+  end
+  return tostring(mapId or "unknown") .. "/" .. cameraMode
+end
 
 local function library(game)
   local exports = game and game.mods and game.mods.exports
@@ -13,6 +39,10 @@ end
 
 function Presentation.endDraw()
   if drawDistance then drawDistance.finish() end
+  if frame and frame.voxelScene
+      and frame.voxelScene.render == frame.telemetrySceneRender then
+    frame.voxelScene.render = frame.originalSceneRender
+  end
   if frame and frame.minimap and frame.minimap.draw == frame.captureMinimap then
     frame.minimap.draw = frame.drawMinimap
   end
@@ -27,6 +57,9 @@ function Presentation.beginDraw(game)
   if not Runtime.isBridgeActive() or not Runtime.shouldRender() then return end
   local lib = library(game)
   if not lib then return end
+  local telemetry = diagnosticTelemetry()
+  local scene = sceneName(game, lib)
+  if telemetry then telemetry.setScene(scene) end
   drawDistance = drawDistance or require("src.vr.DrawDistance")
   drawDistance.begin(lib)
   local minimap = lib.require("Minimap")
@@ -41,7 +74,24 @@ function Presentation.beginDraw(game)
   love.graphics.setCanvas(hud)
   love.graphics.clear(0,0,0,0)
   love.graphics.pop()
-  frame = {minimap=minimap,drawMinimap=minimap.draw,source=hud,width=w,height=h}
+  frame = {minimap=minimap,drawMinimap=minimap.draw,source=hud,width=w,height=h,
+    telemetry=telemetry,scene=scene,sourceEye=0}
+  if telemetry then
+    local voxelScene = lib.require("VoxelScene")
+    local originalRender = voxelScene.render
+    local function pack(...) return {n=select("#",...),...} end
+    frame.voxelScene,frame.originalSceneRender = voxelScene,originalRender
+    frame.telemetrySceneRender = function(...)
+      frame.sourceEye = frame.sourceEye + 1
+      local token = telemetry.beginGpuScope(
+        "source_scene_eye" .. tostring(frame.sourceEye), frame.scene)
+      local result = pack(pcall(originalRender,...))
+      telemetry.endGpuScope(token)
+      if not result[1] then error(result[2],0) end
+      return unpack(result,2,result.n)
+    end
+    voxelScene.render = frame.telemetrySceneRender
+  end
   local player = game.overworld and game.overworld.player
   if player and type(player.pose) == "function" then
     local originalPose, ownPose = player.pose, rawget(player,"pose")

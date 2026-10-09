@@ -37,7 +37,10 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <limits>
+#include <map>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,10 +50,13 @@ extern "C" {
 #include <cstdlib>
 #include <filesystem>
 #include <fcntl.h>
+#include <fstream>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "common/runtime.h"
 #include "modules/graphics/Canvas.h"
+#include "modules/graphics/Graphics.h"
+#include "Telemetry.h"
 #endif
 
 namespace {
@@ -75,6 +81,118 @@ constexpr float kUiQuadDefaultScale = 1.0f;
 #if defined(__linux__)
 constexpr uint64_t kMaxSwapchainDumpPixels = 8u * 1024u * 1024u;
 constexpr uint32_t kMaxSwapchainDumpSubmitDelay = 3600;
+constexpr size_t kGpuTimestampRingCapacity = 64;
+#endif
+
+#if defined(__linux__)
+class OpenGlTimestampBackend final : public vrtelemetry::TimestampBackend {
+public:
+    bool supported() override {
+        GLint bits = 0;
+        glGetQueryiv(GL_TIMESTAMP, GL_QUERY_COUNTER_BITS, &bits);
+        return bits > 0;
+    }
+
+    uint32_t create() override {
+        GLuint query = 0;
+        glGenQueries(1, &query);
+        return query;
+    }
+
+    void timestamp(uint32_t query) override {
+        glQueryCounter(query, GL_TIMESTAMP);
+    }
+
+    bool available(uint32_t query) override {
+        GLint ready = GL_FALSE;
+        glGetQueryObjectiv(query, GL_QUERY_RESULT_AVAILABLE, &ready);
+        return ready == GL_TRUE;
+    }
+
+    bool result(uint32_t query, uint64_t* value) override {
+        GLuint64 timestamp = 0;
+        glGetQueryObjectui64v(query, GL_QUERY_RESULT, &timestamp);
+        *value = static_cast<uint64_t>(timestamp);
+        return true;
+    }
+
+    void destroy(uint32_t query) override {
+        const GLuint name = query;
+        glDeleteQueries(1, &name);
+    }
+};
+
+static uint64_t clockNanoseconds(clockid_t clock) {
+    timespec value{};
+    if (clock_gettime(clock, &value) != 0) return 0;
+    return static_cast<uint64_t>(value.tv_sec) * 1000000000ull +
+           static_cast<uint64_t>(value.tv_nsec);
+}
+
+using DrmGpuCounters = vrtelemetry::DrmClientCounters;
+
+struct DrmGpuClientSample {
+    std::string driver;
+    std::string key;
+    uint64_t clientId = 0;
+    uint64_t busyNs = 0;
+    uint64_t cycles = 0;
+    uint64_t maxFreqHz = 0;
+    bool comparable = false;
+    bool cyclesAvailable = false;
+};
+
+struct TelemetrySnapshot {
+    uint64_t wallNs = 0;
+    uint64_t processCpuNs = 0;
+    uint64_t mainCpuNs = 0;
+    uint64_t gpuBusyNs = 0;
+    uint64_t gpuCycles = 0;
+    uint64_t gpuMaxFreqHz = 0;
+    uint64_t gpuCurrentFreqHz = 0;
+    uint64_t gpuClientCount = 0;
+    uint64_t gpuAddedClients = 0;
+    uint64_t gpuRemovedClients = 0;
+    uint64_t gpuCounterRegressions = 0;
+    bool gpuBusyAvailable = false;
+    bool gpuCyclesAvailable = false;
+    bool gpuMaxFreqAvailable = false;
+    bool gpuCurrentFreqAvailable = false;
+    std::string gpuBusyStatus = "unavailable";
+    uint64_t gpuTimestampResultsDropped = 0;
+    std::vector<DrmGpuClientSample> gpuClients;
+    std::vector<vrtelemetry::TimestampResult> gpuTimestamps;
+};
+
+static std::map<std::string, DrmGpuCounters> readDrmGpuCounters() {
+    std::map<std::string, DrmGpuCounters> counters;
+    std::error_code error;
+    std::filesystem::directory_iterator it("/proc/self/fd", error), end;
+    while (!error && it != end) {
+        const auto entry = *it;
+        const std::string path = "/proc/self/fdinfo/" + entry.path().filename().string();
+        std::ifstream input(path);
+        if (input) {
+            std::ostringstream contents;
+            contents << input.rdbuf();
+            DrmGpuCounters current;
+            if (vrtelemetry::parseDrmFdInfo(contents.str(), &current))
+                vrtelemetry::mergeDrmClient(counters, current);
+        }
+        it.increment(error);
+    }
+    return counters;
+}
+
+static uint64_t readGpuFrequencyHz() {
+    std::ifstream input("/sys/class/devfreq/3d00000.gpu/cur_freq");
+    std::string value;
+    uint64_t hz = 0;
+    if (!input || !std::getline(input, value) ||
+        !vrtelemetry::parseUnsignedField(value, &hz))
+        return 0;
+    return hz;
+}
 #endif
 
 // These unpack-state enums are available in the OpenGL versions supported by
@@ -143,6 +261,19 @@ public:
         m_swapchainDumpConfigLoaded = false;
         m_swapchainDumpAfterSubmits = 0;
         loadSwapchainDumpConfig();
+        m_telemetryEnabled = std::getenv("POKEPORT_VR_TELEMETRY") &&
+                             std::strcmp(std::getenv("POKEPORT_VR_TELEMETRY"), "1") == 0;
+        m_telemetryFrame = 0;
+        m_telemetryScene = "unknown";
+        m_lastWaitWallNs = 0;
+        m_lastWaitCpuNs = 0;
+        m_lastTelemetryWallNs = 0;
+        m_lastTelemetryProcessCpuNs = 0;
+        m_lastTelemetryMainCpuNs = 0;
+        m_gpuCounterTracker.clear();
+        m_completedGpuTimestamps.clear();
+        m_timestampResultsDropped = 0;
+        m_timestampRing.release(m_timestampBackend);
 #endif
 
 #if defined(_WIN32)
@@ -342,7 +473,23 @@ public:
 
         XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         m_frameState = {XR_TYPE_FRAME_STATE};
+#if defined(__linux__)
+        const uint64_t waitWallBefore = m_telemetryEnabled
+            ? clockNanoseconds(CLOCK_MONOTONIC) : 0;
+        const uint64_t waitCpuBefore = m_telemetryEnabled
+            ? clockNanoseconds(CLOCK_THREAD_CPUTIME_ID) : 0;
+#endif
         XrResult result = m_waitFrame(m_session, &waitInfo, &m_frameState);
+#if defined(__linux__)
+        if (m_telemetryEnabled) {
+            const uint64_t waitWallAfter = clockNanoseconds(CLOCK_MONOTONIC);
+            const uint64_t waitCpuAfter = clockNanoseconds(CLOCK_THREAD_CPUTIME_ID);
+            m_lastWaitWallNs = waitWallAfter >= waitWallBefore
+                ? waitWallAfter - waitWallBefore : 0;
+            m_lastWaitCpuNs = waitCpuAfter >= waitCpuBefore
+                ? waitCpuAfter - waitCpuBefore : 0;
+        }
+#endif
         if (XR_FAILED(result)) {
             return failResult("xrWaitFrame", result);
         }
@@ -478,9 +625,9 @@ public:
         }
 
         if (!copyCanvasToSwapchain(m_swapchains[0], left, leftWidth, leftHeight,
-                                   leftReadable) ||
+                                   leftReadable, "eye1") ||
             !copyCanvasToSwapchain(m_swapchains[1], right, rightWidth, rightHeight,
-                                   rightReadable)) {
+                                   rightReadable, "eye2")) {
             endEmptyFrame();
             return false;
         }
@@ -786,6 +933,134 @@ public:
     bool actionSelect() const { return m_actionSelect; }
     bool actionRecenter() const { return m_actionRecenter; }
     uint32_t lastSubmitHeight() const { return m_lastSubmitHeight; }
+
+#if defined(__linux__)
+    bool telemetryEnabled() const { return m_telemetryEnabled; }
+    uint64_t lastWaitWallNs() const { return m_lastWaitWallNs; }
+    uint64_t lastWaitCpuNs() const { return m_lastWaitCpuNs; }
+
+    void setTelemetryContext(uint64_t frame, const std::string& scene) {
+        if (!m_telemetryEnabled) return;
+        m_telemetryFrame = frame;
+        m_telemetryScene = scene.empty() ? "unknown" : scene;
+    }
+
+    bool beginGpuTimestamp(const char* name, uint64_t frame,
+                           const std::string& scene) {
+        if (!m_telemetryEnabled || !sameCurrentContext()) return false;
+        if (!m_timestampRing.probe(m_timestampBackend)) return false;
+        auto* graphics = love::Module::getInstance<love::graphics::Graphics>(
+            love::Module::M_GRAPHICS);
+        if (!graphics) return false;
+        // LOVE batches draws in CPU memory. Emit the prior batch before the
+        // timestamp so the span starts at the actual command-stream boundary.
+        graphics->flushStreamDraws();
+        return m_timestampRing.begin(m_timestampBackend, name, frame,
+                                      scene.c_str());
+    }
+
+    void endGpuTimestamp() {
+        if (!m_telemetryEnabled || !sameCurrentContext()) return;
+        auto* graphics = love::Module::getInstance<love::graphics::Graphics>(
+            love::Module::M_GRAPHICS);
+        if (!graphics) return;
+        // Emit LOVE's batched draws before placing the closing timestamp.
+        graphics->flushStreamDraws();
+        m_timestampRing.end(m_timestampBackend);
+    }
+
+    void setTimestampContext(uint64_t frame, const std::string& scene) {
+        setTelemetryContext(frame, scene);
+    }
+
+    void pollTelemetryGpu() {
+        if (!m_telemetryEnabled || !sameCurrentContext()) return;
+        // Four scopes may be issued per submitted frame. Check a bounded
+        // number of pending slots every frame so the fixed ring does not fill
+        // during the one-second DRM/sysfs sampling interval.
+        auto ready = m_timestampRing.poll(m_timestampBackend, 16);
+        for (auto& result : ready) {
+            if (m_completedGpuTimestamps.size() < 1024)
+                m_completedGpuTimestamps.push_back(std::move(result));
+            else
+                ++m_timestampResultsDropped;
+        }
+    }
+
+    void resetTelemetryWindow() {
+        if (!m_telemetryEnabled) return;
+        m_timestampRing.resetCounters();
+        m_completedGpuTimestamps.clear();
+        m_timestampResultsDropped = 0;
+    }
+
+    TelemetrySnapshot sampleTelemetry() {
+        TelemetrySnapshot sample;
+        if (!m_telemetryEnabled) return sample;
+        const uint64_t wall = clockNanoseconds(CLOCK_MONOTONIC);
+        const uint64_t processCpu = clockNanoseconds(CLOCK_PROCESS_CPUTIME_ID);
+        const uint64_t mainCpu = clockNanoseconds(CLOCK_THREAD_CPUTIME_ID);
+        if (m_lastTelemetryWallNs && wall >= m_lastTelemetryWallNs) {
+            sample.wallNs = wall - m_lastTelemetryWallNs;
+            if (processCpu >= m_lastTelemetryProcessCpuNs)
+                sample.processCpuNs = processCpu - m_lastTelemetryProcessCpuNs;
+            if (mainCpu >= m_lastTelemetryMainCpuNs)
+                sample.mainCpuNs = mainCpu - m_lastTelemetryMainCpuNs;
+        }
+        m_lastTelemetryWallNs = wall;
+        m_lastTelemetryProcessCpuNs = processCpu;
+        m_lastTelemetryMainCpuNs = mainCpu;
+
+        const auto current = readDrmGpuCounters();
+        sample.gpuCurrentFreqHz = readGpuFrequencyHz();
+        sample.gpuCurrentFreqAvailable = sample.gpuCurrentFreqHz > 0;
+        sample.gpuClientCount = current.size();
+        const auto counterWindow = m_gpuCounterTracker.sample(current, sample.wallNs);
+        sample.gpuBusyNs = counterWindow.busyNs;
+        sample.gpuCycles = counterWindow.cycles;
+        sample.gpuMaxFreqHz = counterWindow.maxFreqHz;
+        sample.gpuCyclesAvailable = counterWindow.cyclesAvailable;
+        sample.gpuMaxFreqAvailable = counterWindow.maxFreqAvailable;
+        sample.gpuBusyStatus = counterWindow.status;
+        sample.gpuBusyAvailable = counterWindow.busyAvailable;
+        sample.gpuAddedClients = counterWindow.addedClients;
+        sample.gpuRemovedClients = counterWindow.removedClients;
+        sample.gpuCounterRegressions = counterWindow.regressions;
+        for (const auto& delta : counterWindow.clients) {
+            DrmGpuClientSample client;
+            client.driver = delta.counters.driver;
+            client.key = delta.counters.key;
+            client.clientId = delta.counters.clientId;
+            client.busyNs = delta.busyNs;
+            client.cycles = delta.cycles;
+            client.maxFreqHz = delta.counters.maxFreqHz;
+            client.comparable = delta.comparable;
+            client.cyclesAvailable = delta.cyclesAvailable;
+            sample.gpuClients.push_back(client);
+        }
+
+        sample.gpuTimestamps.swap(m_completedGpuTimestamps);
+        sample.gpuTimestampResultsDropped = m_timestampResultsDropped;
+        m_timestampResultsDropped = 0;
+        return sample;
+    }
+
+    const char* gpuTimestampStatus() const {
+        switch (m_timestampRing.status()) {
+        case vrtelemetry::TimestampRing<kGpuTimestampRingCapacity>::QueryStatus::Available:
+            return "available";
+        case vrtelemetry::TimestampRing<kGpuTimestampRingCapacity>::QueryStatus::Unsupported:
+            return "unsupported";
+        case vrtelemetry::TimestampRing<kGpuTimestampRingCapacity>::QueryStatus::Error:
+            return "error";
+        default:
+            return "unknown";
+        }
+    }
+    uint64_t gpuTimestampPending() const { return m_timestampRing.pending(); }
+    uint64_t gpuTimestampDropped() const { return m_timestampRing.dropped(); }
+    uint64_t gpuTimestampErrors() const { return m_timestampRing.errors(); }
+#endif
 
     void setError(const std::string& message) { m_lastError = message; }
     void updateActions() { (void)syncActions(); }
@@ -1785,7 +2060,7 @@ private:
                        uint32_t destinationHeight,
                        love::graphics::Canvas* canvas,
                        uint32_t sourceWidth, uint32_t sourceHeight,
-                       bool readable) {
+                       bool readable, const char* eyeLabel = nullptr) {
         if (!ensureCopyFramebuffers()) return false;
         GLint previousReadFramebuffer = 0;
         GLint previousDrawFramebuffer = 0;
@@ -1795,6 +2070,14 @@ private:
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
         glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+#if defined(__linux__)
+        bool timestampOpen = false;
+        if (m_telemetryEnabled && eyeLabel) {
+            const std::string label = std::string("canvas_copy_") + eyeLabel;
+            timestampOpen = beginGpuTimestamp(label.c_str(), m_telemetryFrame,
+                                                m_telemetryScene);
+        }
+#endif
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_FRAMEBUFFER_SRGB);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1821,6 +2104,9 @@ private:
         if (previousSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
         else glDisable(GL_FRAMEBUFFER_SRGB);
         glFlush();
+#if defined(__linux__)
+        if (timestampOpen) endGpuTimestamp();
+#endif
 
         if (!copied) return fail(copyError.empty() ? "Canvas OpenGL copy failed" : copyError);
         if (copyGlError != GL_NO_ERROR) {
@@ -2076,7 +2362,7 @@ private:
     bool copyCanvasToSwapchain(Swapchain& swapchain,
                                love::graphics::Canvas* canvas,
                                uint32_t sourceWidth, uint32_t sourceHeight,
-                               bool readable) {
+                               bool readable, const char* eyeLabel) {
         if (!ensureCopyFramebuffers()) return false;
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -2099,7 +2385,7 @@ private:
 
         const bool copied = copyCanvasGpu(swapchain.images[imageIndex].image,
             swapchain.width, swapchain.height, canvas, sourceWidth, sourceHeight,
-            readable);
+            readable, eyeLabel);
         const std::string copyError = m_lastError;
 
         if (copied) {
@@ -2308,6 +2594,12 @@ private:
 
     void cleanup() {
         endEmptyFrame();
+#if defined(__linux__)
+        if (m_glxContext && glXGetCurrentContext() == m_glxContext)
+            m_timestampRing.release(m_timestampBackend);
+        else
+            m_timestampRing.abandon();
+#endif
         if (m_sessionRunning && m_endSession && m_session) {
             (void)m_endSession(m_session);
             m_sessionRunning = false;
@@ -2404,6 +2696,21 @@ private:
     uint32_t m_swapchainDumpAfterSubmits = 0;
     uint8_t m_swapchainDumpMask = 0;
     bool m_swapchainDumpConfigLoaded = false;
+#if defined(__linux__)
+    bool m_telemetryEnabled = false;
+    uint64_t m_telemetryFrame = 0;
+    std::string m_telemetryScene = "unknown";
+    uint64_t m_lastWaitWallNs = 0;
+    uint64_t m_lastWaitCpuNs = 0;
+    uint64_t m_lastTelemetryWallNs = 0;
+    uint64_t m_lastTelemetryProcessCpuNs = 0;
+    uint64_t m_lastTelemetryMainCpuNs = 0;
+    OpenGlTimestampBackend m_timestampBackend;
+    vrtelemetry::TimestampRing<kGpuTimestampRingCapacity> m_timestampRing;
+    vrtelemetry::DrmCounterTracker m_gpuCounterTracker;
+    std::vector<vrtelemetry::TimestampResult> m_completedGpuTimestamps;
+    uint64_t m_timestampResultsDropped = 0;
+#endif
 #endif
 
     PFN_xrGetInstanceProcAddr m_getInstanceProcAddr = nullptr;
@@ -2917,6 +3224,14 @@ static int l_pushStatus(lua_State* L) {
                        static_cast<lua_Number>(g_bridge.predictedDisplayTime()));
         setNumberField(L, table, "predictedDisplayPeriod",
                        static_cast<lua_Number>(g_bridge.predictedDisplayPeriod()));
+#if defined(__linux__)
+        if (g_bridge.telemetryEnabled()) {
+            setNumberField(L, table, "xrWaitWallNs",
+                           static_cast<lua_Number>(g_bridge.lastWaitWallNs()));
+            setNumberField(L, table, "xrWaitMainCpuNs",
+                           static_cast<lua_Number>(g_bridge.lastWaitCpuNs()));
+        }
+#endif
         lua_newtable(L);
         setBoolField(L, -1, "available", g_bridge.actionsSupported());
         lua_newtable(L);
@@ -2962,6 +3277,162 @@ static int l_status(lua_State* L) {
     }
 }
 
+#if defined(__linux__)
+static int l_telemetryClock(lua_State* L) {
+    if (!g_bridge.telemetryEnabled()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    setNumberField(L, -1, "wallNs",
+                   static_cast<lua_Number>(clockNanoseconds(CLOCK_MONOTONIC)));
+    setNumberField(L, -1, "processCpuNs",
+                   static_cast<lua_Number>(clockNanoseconds(CLOCK_PROCESS_CPUTIME_ID)));
+    setNumberField(L, -1, "mainCpuNs",
+                   static_cast<lua_Number>(clockNanoseconds(CLOCK_THREAD_CPUTIME_ID)));
+    return 1;
+}
+
+static int l_telemetryContext(lua_State* L) {
+    if (g_bridge.telemetryEnabled()) {
+        uint64_t frame = 0;
+        if (lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 0)
+            frame = static_cast<uint64_t>(lua_tonumber(L, 1));
+        const char* scene = lua_type(L, 2) == LUA_TSTRING
+            ? lua_tostring(L, 2) : "unknown";
+        g_bridge.setTelemetryContext(frame, scene);
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_gpuScopeBegin(lua_State* L) {
+    if (!g_bridge.telemetryEnabled()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* name = lua_type(L, 1) == LUA_TSTRING
+        ? lua_tostring(L, 1) : "unnamed";
+    uint64_t frame = 0;
+    if (lua_isnumber(L, 2) && lua_tonumber(L, 2) >= 0)
+        frame = static_cast<uint64_t>(lua_tonumber(L, 2));
+    const char* scene = lua_type(L, 3) == LUA_TSTRING
+        ? lua_tostring(L, 3) : "unknown";
+    lua_pushboolean(L, g_bridge.beginGpuTimestamp(name, frame, scene));
+    return 1;
+}
+
+static int l_gpuScopeEnd(lua_State* L) {
+    (void)L;
+    g_bridge.endGpuTimestamp();
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_telemetrySample(lua_State* L) {
+    if (!g_bridge.telemetryEnabled()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const TelemetrySnapshot sample = g_bridge.sampleTelemetry();
+    lua_newtable(L);
+    const int table = lua_gettop(L);
+    setNumberField(L, table, "intervalWallNs",
+                   static_cast<lua_Number>(sample.wallNs));
+    setNumberField(L, table, "processCpuNs",
+                   static_cast<lua_Number>(sample.processCpuNs));
+    setNumberField(L, table, "mainCpuNs",
+                   static_cast<lua_Number>(sample.mainCpuNs));
+    setStringField(L, table, "gpuBusyStatus", sample.gpuBusyStatus);
+    setBoolField(L, table, "gpuBusyAvailable", sample.gpuBusyAvailable);
+    if (sample.gpuBusyAvailable && sample.wallNs > 0) {
+        setNumberField(L, table, "gpuBusyNs",
+                       static_cast<lua_Number>(sample.gpuBusyNs));
+        setNumberField(L, table, "gpuBusyPct",
+                       static_cast<lua_Number>(sample.gpuBusyNs) * 100.0 /
+                           static_cast<lua_Number>(sample.wallNs));
+    }
+    if (sample.gpuCyclesAvailable)
+        setNumberField(L, table, "gpuCycles",
+                       static_cast<lua_Number>(sample.gpuCycles));
+    if (sample.gpuMaxFreqAvailable)
+        setNumberField(L, table, "gpuMaxFreqHz",
+                       static_cast<lua_Number>(sample.gpuMaxFreqHz));
+    if (sample.gpuCurrentFreqAvailable)
+        setNumberField(L, table, "gpuCurrentFreqHz",
+                       static_cast<lua_Number>(sample.gpuCurrentFreqHz));
+    setNumberField(L, table, "gpuClientCount",
+                   static_cast<lua_Number>(sample.gpuClientCount));
+    setNumberField(L, table, "gpuAddedClients",
+                   static_cast<lua_Number>(sample.gpuAddedClients));
+    setNumberField(L, table, "gpuRemovedClients",
+                   static_cast<lua_Number>(sample.gpuRemovedClients));
+    setNumberField(L, table, "gpuCounterRegressions",
+                   static_cast<lua_Number>(sample.gpuCounterRegressions));
+
+    lua_newtable(L);
+    for (size_t i = 0; i < sample.gpuClients.size(); ++i) {
+        const DrmGpuClientSample& client = sample.gpuClients[i];
+        lua_newtable(L);
+        setStringField(L, -1, "driver", client.driver);
+        setStringField(L, -1, "identity", client.key);
+        setNumberField(L, -1, "clientId",
+                       static_cast<lua_Number>(client.clientId));
+        setBoolField(L, -1, "comparable", client.comparable);
+        if (client.comparable && sample.wallNs > 0) {
+            setNumberField(L, -1, "busyNs",
+                           static_cast<lua_Number>(client.busyNs));
+            setNumberField(L, -1, "busyPct",
+                           static_cast<lua_Number>(client.busyNs) * 100.0 /
+                               static_cast<lua_Number>(sample.wallNs));
+        }
+        if (client.cyclesAvailable)
+            setNumberField(L, -1, "cycles",
+                           static_cast<lua_Number>(client.cycles));
+        if (client.maxFreqHz)
+            setNumberField(L, -1, "maxFreqHz",
+                           static_cast<lua_Number>(client.maxFreqHz));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, table, "gpuClients");
+
+    setStringField(L, table, "gpuTimestampStatus", g_bridge.gpuTimestampStatus());
+    setNumberField(L, table, "gpuTimestampPending",
+                   static_cast<lua_Number>(g_bridge.gpuTimestampPending()));
+    setNumberField(L, table, "gpuTimestampDropped",
+                   static_cast<lua_Number>(g_bridge.gpuTimestampDropped()));
+    setNumberField(L, table, "gpuTimestampErrors",
+                   static_cast<lua_Number>(g_bridge.gpuTimestampErrors()));
+    setNumberField(L, table, "gpuTimestampResultsDropped",
+                   static_cast<lua_Number>(sample.gpuTimestampResultsDropped));
+    lua_newtable(L);
+    for (size_t i = 0; i < sample.gpuTimestamps.size(); ++i) {
+        const vrtelemetry::TimestampResult& result = sample.gpuTimestamps[i];
+        lua_newtable(L);
+        setStringField(L, -1, "name", result.name);
+        setStringField(L, -1, "scene", result.scene);
+        setNumberField(L, -1, "frame", static_cast<lua_Number>(result.frame));
+        setNumberField(L, -1, "durationNs",
+                       static_cast<lua_Number>(result.durationNs));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, table, "gpuTimestamps");
+    return 1;
+}
+
+static int l_telemetryPollGpu(lua_State* L) {
+    (void)L;
+    g_bridge.pollTelemetryGpu();
+    return 0;
+}
+
+static int l_telemetryResetWindow(lua_State* L) {
+    (void)L;
+    g_bridge.resetTelemetryWindow();
+    return 0;
+}
+#endif
+
 static int l_lastError(lua_State* L) {
     const std::string& error = g_bridge.lastError();
     if (error.empty()) {
@@ -2994,6 +3465,13 @@ extern "C" __attribute__((visibility("default"))) int luaopen_xrbridge(lua_State
         {"submitQuad", l_submitQuad},
 #if defined(__linux__)
         {"submitCanvases", l_submitCanvases},
+        {"telemetryClock", l_telemetryClock},
+        {"telemetryContext", l_telemetryContext},
+        {"telemetrySample", l_telemetrySample},
+        {"telemetryPollGpu", l_telemetryPollGpu},
+        {"telemetryResetWindow", l_telemetryResetWindow},
+        {"gpuScopeBegin", l_gpuScopeBegin},
+        {"gpuScopeEnd", l_gpuScopeEnd},
 #endif
 #if defined(__linux__) && defined(XRBRIDGE_TESTING)
         {"testCanvasCopy", l_testCanvasCopy},

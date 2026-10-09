@@ -36,7 +36,8 @@ if bridge_build.get('runtime_image_id') != metadata.get('runtime_build', {}).get
     raise SystemExit('native bridge and runtime image identities differ')
 if bridge_build.get('checks', {}).get('abi_ceilings_passed') is not True:
     raise SystemExit('native bridge ABI ceilings were not verified')
-for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp'):
+for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
+            'vrbridge/Telemetry.h'):
     if bridge_build.get('source', {}).get('files', {}).get(rel) != hashlib.sha256((root / rel).read_bytes()).hexdigest():
         raise SystemExit(f'packaged bridge source differs from the built source: {rel}')
 license_files = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -59,7 +60,8 @@ def allowlisted(rel):
     if rel in {'README.md', 'LICENSES.md', 'LICENSE-MIT-ENGINE', 'TOOLS.md', 'VR_ARCHITECTURE.md',
                'RUNTIME-IMAGE.json', 'PACKAGE-METADATA.json', 'SHA256SUMS',
                'XRBRIDGE-BUILD.json', 'XRBRIDGE-DEPS.txt', 'xrbridge.so',
-               'vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp', 'vrbridge/README.md', 'integration/main.lua.patch', 'sources/SHA256SUMS',
+               'vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
+               'vrbridge/Telemetry.h', 'vrbridge/README.md', 'integration/main.lua.patch', 'sources/SHA256SUMS',
                'runtime/bin/love', 'runtime/dependency-closure.txt'}:
         return True
     if rel.startswith('tools/'):

@@ -94,6 +94,47 @@ application submission rates, not compositor output rates. `draw` includes
 be summed or treated as CPU-only costs. Full-resolution comparison is pending.
 No lower-resolution default or measured resolution benefit has been adopted.
 
+## Opt-in CPU and GPU telemetry
+
+Set `POKEPORT_VR_TELEMETRY=1` for diagnostics. With it unset, the telemetry
+module and native timing/counter paths are inactive. `integration/tests/vr_telemetry_driver.lua`
+restores the copied Yellow slot through the supplied saved-scene setup, warms
+for 10 seconds, then marks completion of an initial 90-second outdoor/indoor
+interval (`POKEPORT_VR_TELEMETRY_SECONDS` accepts 10–300 seconds). Telemetry
+continues after that marker while the player adjusts renderer settings. It does
+not lower eye resolution. The driver is optional and must be copied to the
+diagnostic install. It keeps yielding without changing controls so the game
+stays open until the player closes it.
+
+Per-stage wall and CPU deltas cover the game update/draw, XR begin, and XR
+submission. `draw` contains XR begin/wait; these stage values overlap and must
+not be added together. `xrWaitFrame` wall and calling-thread CPU are reported
+separately. Process and main-thread CPU percentages use elapsed monotonic wall
+time as the denominator: 100% is one full core, so process usage can exceed
+100% when Zink or other worker threads are active. One-second summaries carry
+map/camera identity; intervals crossing a map change or focus/render loss are
+marked as excluded or transitional. Sampled draw-distance index counts describe
+only eligible map geometry and sum the observed per-frame status snapshots.
+
+OpenGL timer queries bracket each actual VoxelScene render by eye and each
+native Canvas-to-swapchain copy. LÖVE batches are flushed at scope boundaries
+only while telemetry is enabled. A fixed 64-entry query ring checks a bounded
+batch of pending queries each XR frame and only reads results after both
+queries report ready; proc/sysfs counters remain one-second samples. Output
+includes pending, dropped, unsupported, and error states plus the frame and
+scene captured when the query was issued. A timestamp span is elapsed GPU
+command-stream time, not hardware utilization or exclusive shader-busy time.
+
+GPU busy time is derived from the process's DRM `drm-engine-gpu` nanosecond
+counters in `/proc/self/fdinfo`, deduplicated by device/client identity. The
+reported percentage is per-process engine busy time divided by the sampled wall
+interval, not whole-system GPU utilization. New, removed, or regressing clients
+are marked warming/partial; counter regressions retain a high-water baseline.
+`drm-cycles-gpu`, max frequency, and the sampled devfreq current frequency are
+reported only when available. Frequency is not a utilization measure. Missing
+busy counters remain unavailable. No CPU/GPU diagnosis or new performance
+acceptance has been made from these diagnostics yet.
+
 A read-only pose review found locate/render/submit using the same predicted pose
 and time. Conditional tracking risks remain unmeasured: the small head-translation
 clamp, invalid-pose fallback versus native submission, and reference-space changes.
