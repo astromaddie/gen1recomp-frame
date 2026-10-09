@@ -4,6 +4,11 @@ local bridge = {
   ready = true,
   focused = true,
   shouldRender = true,
+  effectiveShouldRender = true,
+  unattended = false,
+  forceRenderActive = false,
+  forcedRender = false,
+  forceRenderExpired = false,
   period = 11111111,
   displayTime = 1000000000000000,
   statusCalls = 0,
@@ -21,6 +26,11 @@ function bridge.status()
     ready = bridge.ready,
     focused = bridge.focused,
     shouldRender = bridge.shouldRender,
+    effectiveShouldRender = bridge.effectiveShouldRender,
+    unattended = bridge.unattended,
+    forceRenderActive = bridge.forceRenderActive,
+    forcedRender = bridge.forcedRender,
+    forceRenderExpired = bridge.forceRenderExpired,
     predictedDisplayPeriod = bridge.period,
     predictedDisplayTime = bridge.displayTime,
     quitRequested = false,
@@ -32,8 +42,9 @@ function bridge.pollActions()
 end
 function bridge.beginFrame()
   bridge.beginCalls = bridge.beginCalls + 1
-  return { fov = { left = -0.7, right = 0.7 } },
-    { fov = { left = -0.7, right = 0.7 } }, bridge.shouldRender
+  return bridge.leftView or { fov = { left = -0.7, right = 0.7 } },
+    bridge.rightView or { fov = { left = -0.7, right = 0.7 } },
+    bridge.effectiveShouldRender
 end
 function bridge.abortFrame() bridge.abortCalls = bridge.abortCalls + 1 end
 function bridge.submitCanvases(left, right)
@@ -85,6 +96,7 @@ bridge.focused = false
 assert(not Runtime.shouldSimulate(), "focus loss must freeze game simulation")
 bridge.focused = true
 bridge.shouldRender = false
+bridge.effectiveShouldRender = false
 bridge.displayTime = bridge.displayTime + 1000000000
 assert(Runtime.beginFrame(640, 480))
 assert(Runtime.isFramePaced(), "standby frames remain compositor paced")
@@ -93,7 +105,68 @@ Runtime.abortFrame()
 assert(bridge.abortCalls == 3,
   "each non-rendered or explicitly discarded frame must be closed exactly once")
 
+bridge.focused = false
+bridge.unattended = true
+bridge.forceRenderActive = true
+bridge.forcedRender = true
+bridge.effectiveShouldRender = true
+bridge.displayTime = bridge.displayTime + bridge.period
+assert(Runtime.beginFrame(640, 480))
+assert(Runtime.shouldRender() and Runtime.shouldSimulate(),
+  "active explicit unattended authorization must admit simulation and rendering")
+assert(math.abs(Runtime.frameDelta(0.5) - bridge.period / 1000000000) < 0.000001,
+  "unattended rendering must keep the real OpenXR predicted period")
+local forcedStatus = Runtime.status().native
+assert(forcedStatus.focused == false and forcedStatus.shouldRender == false
+  and forcedStatus.effectiveShouldRender == true
+  and forcedStatus.unattended == true and forcedStatus.forceRenderActive == true
+  and forcedStatus.forcedRender == true,
+  "diagnostic rendering must preserve raw runtime status separately")
+Runtime.abortFrame()
+bridge.leftView = { position = { x = -0.032, y = 0, z = 0 },
+  orientation = { x = 0, y = 0, z = 0, w = 1 }, positionValid = false,
+  orientationValid = false, poseUsable = true, syntheticPose = true,
+  fov = { left = -0.7, right = 0.7 } }
+bridge.rightView = { position = { x = 0.032, y = 0, z = 0 },
+  orientation = { x = 0, y = 0, z = 0, w = 1 }, positionValid = false,
+  orientationValid = false, poseUsable = true, syntheticPose = true,
+  fov = { left = -0.7, right = 0.7 } }
+bridge.displayTime = bridge.displayTime + bridge.period
+assert(Runtime.beginFrame(640, 480))
+local forcedLeft, forcedRight = Runtime.views({ mode = "above",
+  eye = { x = 0, y = 0, z = 0 }, focus = { x = 0, y = 0, z = -10 } }, 1)
+assert(math.abs(math.abs(forcedLeft.eye.x - forcedRight.eye.x) - 3.072) < 0.01,
+  "derived synthetic views must preserve runtime-measured eye separation in the game cameras")
+bridge.leftView, bridge.rightView = nil, nil
+Runtime.abortFrame()
+
+bridge.forceRenderActive = false
+bridge.forcedRender = false
+bridge.forceRenderExpired = true
+bridge.effectiveShouldRender = false
+bridge.displayTime = bridge.displayTime + 1000000000
+assert(Runtime.beginFrame(640, 480))
+assert(not Runtime.shouldSimulate() and not Runtime.shouldRender(),
+  "expired authorization must restore the raw standby gate")
+Runtime.abortFrame()
+
+-- A runtime can leave shouldRender true while focus is lost. After timeout,
+-- that must not keep simulation active merely because the raw flag stayed true.
 bridge.shouldRender = true
+bridge.effectiveShouldRender = true
+bridge.displayTime = bridge.displayTime + bridge.period
+assert(Runtime.beginFrame(640, 480))
+assert(Runtime.shouldRender() and not Runtime.shouldSimulate(),
+  "unfocused raw shouldRender after timeout must not bypass simulation policy")
+Runtime.abortFrame()
+
+bridge.focused = true
+bridge.unattended = false
+bridge.forceRenderActive = false
+bridge.forcedRender = false
+bridge.forceRenderExpired = false
+bridge.shouldRender = true
+bridge.effectiveShouldRender = true
 bridge.displayTime = bridge.displayTime + 1000000000
 assert(Runtime.beginFrame(640, 480))
 assert(math.abs(Runtime.frameDelta(0.5) - 0.011111111) < 0.000001,

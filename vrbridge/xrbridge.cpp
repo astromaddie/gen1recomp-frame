@@ -128,6 +128,18 @@ static uint64_t clockNanoseconds(clockid_t clock) {
            static_cast<uint64_t>(value.tv_nsec);
 }
 
+static uint64_t forceRenderDurationSeconds() {
+    constexpr uint64_t maximum = vrtelemetry::ForcedRenderWindow::kMaxDurationSeconds;
+    const char* raw = std::getenv("POKEPORT_XR_FORCE_RENDER_SECONDS");
+    if (!raw || !*raw) return maximum;
+    if (*raw == '-') return maximum;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(raw, &end, 10);
+    if (errno || end == raw || *end != '\0') return maximum;
+    return std::min<uint64_t>(static_cast<uint64_t>(parsed), maximum);
+}
+
 using DrmGpuCounters = vrtelemetry::DrmClientCounters;
 
 struct DrmGpuClientSample {
@@ -262,6 +274,26 @@ public:
         loadSwapchainDumpConfig();
         m_telemetryEnabled = std::getenv("POKEPORT_VR_TELEMETRY") &&
                              std::strcmp(std::getenv("POKEPORT_VR_TELEMETRY"), "1") == 0;
+        const char* forceRender = std::getenv("POKEPORT_XR_FORCE_RENDER");
+        m_forceRenderRequested = m_telemetryEnabled && forceRender &&
+            std::strcmp(forceRender, "1") == 0;
+        m_forceRenderDurationSeconds = forceRenderDurationSeconds();
+        m_forceRenderWindow.arm(false, false, 0, 0);
+        m_forceRenderTimeoutReported = false;
+        m_forceRenderIpdReported = false;
+        m_forceRenderThisFrame = false;
+        m_forceRenderBlockedThisFrame = false;
+        m_poseSource = "unavailable";
+        m_ipdSource = "unavailable";
+        m_syntheticPoseThisFrame = false;
+        m_poseUsableThisFrame = false;
+        m_hasIpd = false;
+        m_haveRuntimeCenter = false;
+        m_haveSyntheticCenter = false;
+        m_ipdFromCurrentFrame = false;
+        m_havePreviousPose = false;
+        m_haveStableRuntimePose = false;
+        m_stablePoseSamples = 0;
         m_telemetryFrame = 0;
         m_telemetryScene = "unknown";
         m_lastWaitWallNs = 0;
@@ -438,6 +470,18 @@ public:
         if (!pumpEvents()) {
             return false;
         }
+#if defined(__linux__)
+        if (m_forceRenderRequested) {
+            const uint64_t startNs = clockNanoseconds(CLOCK_MONOTONIC);
+            m_forceRenderWindow.arm(true, true, startNs,
+                                    m_forceRenderDurationSeconds);
+            std::fprintf(stderr,
+                "[xrbridge] unattended force-render armed duration_s=%llu; "
+                "OpenXR focused/shouldRender status remains raw\n",
+                static_cast<unsigned long long>(
+                    m_forceRenderWindow.durationNs() / 1000000000ull));
+        }
+#endif
         return true;
     }
 
@@ -521,6 +565,35 @@ public:
         }
 
         m_viewStateFlags = viewState.viewStateFlags;
+#if defined(__linux__)
+        if (m_forceRenderRequested)
+            updateRuntimePoseCache(m_views, m_viewStateFlags);
+        m_forceRenderThisFrame = false;
+        m_forceRenderBlockedThisFrame = false;
+        m_syntheticPoseThisFrame = false;
+        m_poseUsableThisFrame =
+            (m_viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0 &&
+            (m_viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+        m_poseSource = m_poseUsableThisFrame ? "runtime-current" : "unavailable";
+        if (m_hasIpd)
+            m_ipdSource = m_ipdFromCurrentFrame ? "runtime" : "runtime-cached";
+        else
+            m_ipdSource = "unavailable";
+        if (forceRenderActive() && m_frameState.shouldRender != XR_TRUE) {
+            if (m_hasIpd) {
+                m_forceRenderThisFrame = applyUnattendedPose();
+                m_forceRenderBlockedThisFrame = !m_forceRenderThisFrame;
+            } else {
+                m_forceRenderBlockedThisFrame = true;
+                if (!m_forceRenderIpdReported) {
+                    std::fprintf(stderr,
+                        "[xrbridge] unattended force-render blocked: no valid runtime "
+                        "eye separation is available yet; no IPD will be invented\n");
+                    m_forceRenderIpdReported = true;
+                }
+            }
+        }
+#endif
         ++m_beginCount;
         m_lastError.clear();
         return true;
@@ -544,9 +617,9 @@ public:
             return fail("submit dimensions must exactly match the OpenXR swapchains; "
                         "set create({width=..., height=...}) if needed");
         }
-        if (m_frameState.shouldRender != XR_TRUE) {
+        if (!renderAllowedForCurrentFrame()) {
             endEmptyFrame();
-            return fail("submit is not valid when xrWaitFrame says not to render");
+            return fail("submit requires raw OpenXR shouldRender or an active bounded diagnostic authorization");
         }
 
         const uint64_t expectedBytes = static_cast<uint64_t>(width) * height * 4u;
@@ -612,9 +685,9 @@ public:
             endEmptyFrame();
             return fail("the current OpenGL context changed before submitCanvases");
         }
-        if (m_frameState.shouldRender != XR_TRUE) {
+        if (!renderAllowedForCurrentFrame()) {
             endEmptyFrame();
-            return fail("submitCanvases is not valid when xrWaitFrame says not to render");
+            return fail("submitCanvases requires raw OpenXR shouldRender or an active bounded diagnostic authorization");
         }
         if (!left || !right || leftWidth == 0 || leftHeight == 0 ||
             rightWidth == 0 || rightHeight == 0 ||
@@ -689,9 +762,9 @@ public:
             endEmptyFrame();
             return fail("submitQuad scale must be finite and within 0..4");
         }
-        if (m_frameState.shouldRender != XR_TRUE) {
+        if (!renderAllowedForCurrentFrame()) {
             endEmptyFrame();
-            return fail("submitQuad is not valid when xrWaitFrame says not to render");
+            return fail("submitQuad requires raw OpenXR shouldRender or an active bounded diagnostic authorization");
         }
 
         const uint64_t expectedBytes = static_cast<uint64_t>(width) * height * 4u;
@@ -858,6 +931,61 @@ public:
     const std::string& lastError() const { return m_lastError; }
     bool focused() const { return m_sessionState == XR_SESSION_STATE_FOCUSED; }
     bool shouldRender() const { return m_frameState.shouldRender == XR_TRUE; }
+#if defined(__linux__)
+    bool unattended() const { return m_forceRenderWindow.requested(); }
+    bool forcedRenderThisFrame() {
+        return m_forceRenderThisFrame && forceRenderActive();
+    }
+    bool forceRenderActive() {
+        if (!m_forceRenderWindow.requested()) return false;
+        const bool active = m_forceRenderWindow.active(
+            clockNanoseconds(CLOCK_MONOTONIC));
+        if (!active && m_forceRenderWindow.expired() &&
+            !m_forceRenderTimeoutReported) {
+            std::fprintf(stderr,
+                "[xrbridge] unattended force-render timed out after %llu seconds\n",
+                static_cast<unsigned long long>(
+                    m_forceRenderWindow.durationNs() / 1000000000ull));
+            m_forceRenderTimeoutReported = true;
+        }
+        return active;
+    }
+    bool forceRenderExpired() {
+        (void)forceRenderActive();
+        return m_forceRenderWindow.expired();
+    }
+    bool forceRenderBlocked() const { return m_forceRenderBlockedThisFrame; }
+    const char* poseSource() const { return m_poseSource; }
+    const char* ipdSource() const { return m_ipdSource; }
+    bool poseUsable() const { return m_poseUsableThisFrame; }
+    bool syntheticPose() const { return m_syntheticPoseThisFrame; }
+    bool runtimePositionValid() const {
+        return (m_viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+    }
+    bool runtimeOrientationValid() const {
+        return (m_viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+    }
+#else
+    bool poseUsable() const {
+        return (m_viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0 &&
+               (m_viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+    }
+    bool syntheticPose() const { return false; }
+#endif
+    bool effectiveShouldRender() {
+#if defined(__linux__)
+        return m_frameState.shouldRender == XR_TRUE || forcedRenderThisFrame();
+#else
+        return shouldRender();
+#endif
+    }
+    bool renderAllowedForCurrentFrame() {
+#if defined(__linux__)
+        return m_frameState.shouldRender == XR_TRUE || forcedRenderThisFrame();
+#else
+        return m_frameState.shouldRender == XR_TRUE;
+#endif
+    }
     bool quitRequested() const { return m_quitRequested; }
     bool instanceLossPending() const { return m_instanceLossPending; }
     XrSessionState sessionState() const { return m_sessionState; }
@@ -2521,6 +2649,111 @@ private:
         m_frameActive = false;
     }
 
+#if defined(__linux__)
+    void updateRuntimePoseCache(const std::array<XrView, 2>& views,
+                                XrViewStateFlags flags) {
+        m_ipdFromCurrentFrame = false;
+        const bool positionValid = (flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+        const bool orientationValid = (flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+        if (positionValid) {
+            const float dx = views[1].pose.position.x - views[0].pose.position.x;
+            const float dy = views[1].pose.position.y - views[0].pose.position.y;
+            const float dz = views[1].pose.position.z - views[0].pose.position.z;
+            const float separation = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (std::isfinite(separation) && separation >= 0.045f &&
+                separation <= 0.09f) {
+                m_eyeSeparationMeters = separation;
+                m_hasIpd = true;
+                m_ipdFromCurrentFrame = true;
+            }
+            m_runtimeCenter = {
+                (views[0].pose.position.x + views[1].pose.position.x) * 0.5f,
+                (views[0].pose.position.y + views[1].pose.position.y) * 0.5f,
+                (views[0].pose.position.z + views[1].pose.position.z) * 0.5f};
+            m_haveRuntimeCenter = std::isfinite(m_runtimeCenter.x) &&
+                std::isfinite(m_runtimeCenter.y) && std::isfinite(m_runtimeCenter.z);
+        }
+
+        if (!positionValid || !orientationValid) {
+            m_havePreviousPose = false;
+            m_stablePoseSamples = 0;
+            return;
+        }
+
+        const auto& orientation = views[0].pose.orientation;
+        const double qLength = std::sqrt(
+            static_cast<double>(orientation.x) * orientation.x +
+            static_cast<double>(orientation.y) * orientation.y +
+            static_cast<double>(orientation.z) * orientation.z +
+            static_cast<double>(orientation.w) * orientation.w);
+        if (!std::isfinite(qLength) || qLength < 0.5) {
+            m_havePreviousPose = false;
+            m_stablePoseSamples = 0;
+            return;
+        }
+
+        bool stable = false;
+        if (m_havePreviousPose) {
+            const float cx = m_runtimeCenter.x - m_previousRuntimeCenter.x;
+            const float cy = m_runtimeCenter.y - m_previousRuntimeCenter.y;
+            const float cz = m_runtimeCenter.z - m_previousRuntimeCenter.z;
+            const double distance = std::sqrt(static_cast<double>(cx) * cx +
+                static_cast<double>(cy) * cy + static_cast<double>(cz) * cz);
+            const auto& previous = m_previousRuntimeViews[0].pose.orientation;
+            const double previousLength = std::sqrt(
+                static_cast<double>(previous.x) * previous.x +
+                static_cast<double>(previous.y) * previous.y +
+                static_cast<double>(previous.z) * previous.z +
+                static_cast<double>(previous.w) * previous.w);
+            const double dot = std::abs(
+                static_cast<double>(orientation.x) * previous.x +
+                static_cast<double>(orientation.y) * previous.y +
+                static_cast<double>(orientation.z) * previous.z +
+                static_cast<double>(orientation.w) * previous.w) /
+                (qLength * previousLength);
+            // Require five consecutive runtime-valid poses within 1 cm and
+            // about 2 degrees before freezing and reusing the real head pose.
+            stable = distance <= 0.01 && dot >= 0.99985;
+        }
+        m_stablePoseSamples = stable ? m_stablePoseSamples + 1 : 1;
+        m_previousRuntimeViews = views;
+        m_previousRuntimeCenter = m_runtimeCenter;
+        m_havePreviousPose = true;
+        if (m_stablePoseSamples >= 5 && m_hasIpd) {
+            m_stableRuntimeViews = views;
+            m_haveStableRuntimePose = true;
+        }
+    }
+
+    bool applyUnattendedPose() {
+        if (m_haveStableRuntimePose) {
+            m_views[0].pose = m_stableRuntimeViews[0].pose;
+            m_views[1].pose = m_stableRuntimeViews[1].pose;
+            m_poseUsableThisFrame = true;
+            m_syntheticPoseThisFrame = false;
+            m_poseSource = "runtime-stable";
+            return true;
+        }
+        if (!m_hasIpd) return false;
+        if (!m_haveSyntheticCenter) {
+            if (!m_haveRuntimeCenter) return false;
+            m_syntheticCenter = m_runtimeCenter;
+            m_haveSyntheticCenter = true;
+        }
+        const float halfIpd = m_eyeSeparationMeters * 0.5f;
+        for (size_t i = 0; i < m_views.size(); ++i) {
+            m_views[i].pose.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+            m_views[i].pose.position = m_syntheticCenter;
+            m_views[i].pose.position.x += i == 0 ? -halfIpd : halfIpd;
+        }
+        m_poseUsableThisFrame = true;
+        m_syntheticPoseThisFrame = true;
+        m_poseSource = "synthetic-fixed-center";
+        return true;
+    }
+
+#endif
+
     bool sameCurrentContext() const {
 #if defined(_WIN32)
         return m_hdc == wglGetCurrentDC() && m_glrc == wglGetCurrentContext();
@@ -2699,6 +2932,30 @@ private:
     bool m_swapchainDumpConfigLoaded = false;
 #if defined(__linux__)
     bool m_telemetryEnabled = false;
+    bool m_forceRenderRequested = false;
+    bool m_forceRenderTimeoutReported = false;
+    bool m_forceRenderIpdReported = false;
+    bool m_forceRenderThisFrame = false;
+    bool m_forceRenderBlockedThisFrame = false;
+    bool m_poseUsableThisFrame = false;
+    bool m_syntheticPoseThisFrame = false;
+    bool m_ipdFromCurrentFrame = false;
+    bool m_hasIpd = false;
+    bool m_haveRuntimeCenter = false;
+    bool m_haveSyntheticCenter = false;
+    bool m_havePreviousPose = false;
+    bool m_haveStableRuntimePose = false;
+    uint64_t m_forceRenderDurationSeconds = 120;
+    uint32_t m_stablePoseSamples = 0;
+    float m_eyeSeparationMeters = 0.0f;
+    XrVector3f m_runtimeCenter{};
+    XrVector3f m_previousRuntimeCenter{};
+    XrVector3f m_syntheticCenter{};
+    std::array<XrView, 2> m_previousRuntimeViews{};
+    std::array<XrView, 2> m_stableRuntimeViews{};
+    const char* m_poseSource = "unavailable";
+    const char* m_ipdSource = "unavailable";
+    vrtelemetry::ForcedRenderWindow m_forceRenderWindow;
     uint64_t m_telemetryFrame = 0;
     std::string m_telemetryScene = "unknown";
     uint64_t m_lastWaitWallNs = 0;
@@ -2940,7 +3197,8 @@ static void setQuaternionField(lua_State* L, int tableIndex, const char* name,
 
 static void pushEyeRecord(lua_State* L, const char* eyeName, const XrView& view,
                           bool focused, XrViewStateFlags stateFlags, uint32_t width,
-                          uint32_t height) {
+                          uint32_t height, bool poseUsable,
+                          bool syntheticPose) {
     lua_newtable(L);
     lua_pushstring(L, eyeName);
     lua_setfield(L, -2, "eyeName");
@@ -2964,6 +3222,8 @@ static void pushEyeRecord(lua_State* L, const char* eyeName, const XrView& view,
                  (stateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0);
     setBoolField(L, -1, "positionValid",
                  (stateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0);
+    setBoolField(L, -1, "poseUsable", poseUsable);
+    setBoolField(L, -1, "syntheticPose", syntheticPose);
 }
 
 static int l_beginFrame(lua_State* L) {
@@ -2977,10 +3237,12 @@ static int l_beginFrame(lua_State* L) {
         }
         const auto& views = g_bridge.views();
         pushEyeRecord(L, "left", views[0], g_bridge.focused(), g_bridge.viewStateFlags(),
-                      g_bridge.swapchainWidth(), g_bridge.swapchainHeight());
+                      g_bridge.swapchainWidth(), g_bridge.swapchainHeight(),
+                      g_bridge.poseUsable(), g_bridge.syntheticPose());
         pushEyeRecord(L, "right", views[1], g_bridge.focused(), g_bridge.viewStateFlags(),
-                      g_bridge.swapchainWidth(), g_bridge.swapchainHeight());
-        lua_pushboolean(L, g_bridge.shouldRender() ? 1 : 0);
+                      g_bridge.swapchainWidth(), g_bridge.swapchainHeight(),
+                      g_bridge.poseUsable(), g_bridge.syntheticPose());
+        lua_pushboolean(L, g_bridge.effectiveShouldRender() ? 1 : 0);
         return 3;
     } catch (...) {
         g_bridge.abortFrame();
@@ -3172,6 +3434,20 @@ static int l_pushStatus(lua_State* L) {
         setStringField(L, table, "foveationSourceShading", "unverified-runtime-injection");
         setBoolField(L, table, "focused", g_bridge.focused());
         setBoolField(L, table, "shouldRender", g_bridge.shouldRender());
+#if defined(__linux__)
+        setBoolField(L, table, "effectiveShouldRender",
+                     g_bridge.effectiveShouldRender());
+        setBoolField(L, table, "unattended", g_bridge.unattended());
+        setBoolField(L, table, "forceRenderActive", g_bridge.forceRenderActive());
+        setBoolField(L, table, "forcedRender", g_bridge.forcedRenderThisFrame());
+        setBoolField(L, table, "forceRenderExpired", g_bridge.forceRenderExpired());
+        setBoolField(L, table, "forceRenderBlocked", g_bridge.forceRenderBlocked());
+        setBoolField(L, table, "runtimePositionValid", g_bridge.runtimePositionValid());
+        setBoolField(L, table, "runtimeOrientationValid", g_bridge.runtimeOrientationValid());
+        setBoolField(L, table, "syntheticPose", g_bridge.syntheticPose());
+        setStringField(L, table, "poseSource", g_bridge.poseSource());
+        setStringField(L, table, "ipdSource", g_bridge.ipdSource());
+#endif
         setBoolField(L, table, "quitRequested", g_bridge.quitRequested());
         setBoolField(L, table, "instanceLossPending", g_bridge.instanceLossPending());
         setBoolField(L, table, "frameControllerProfileAvailable",

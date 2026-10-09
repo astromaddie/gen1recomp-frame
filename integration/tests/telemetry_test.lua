@@ -75,6 +75,7 @@ assert(bridge.lastContext.scene == "PEWTER_CITY/above")
 Telemetry.startWindow()
 assert(bridge.resetWindows == 1,
   "the bounded diagnostic window must reset setup-time query drop counters")
+Telemetry.recordFrame(9, { focused = true, shouldRender = true })
 
 local token = Telemetry.beginStage("game_draw")
 now.wallNs = now.wallNs + 13000000
@@ -108,14 +109,14 @@ assert(loadLine and loadLine:find("process_cpu_pct=150.0"),
 assert(loadLine:find("main_thread_cpu_pct=80.0")
   and loadLine:find("process_gpu_busy_pct=50.0"))
 assert(sceneLine and sceneLine:find("scene=PEWTER_CITY/above")
-  and sceneLine:find("game_draw") and sceneLine:find("index_updates=4")
+  and sceneLine:find("game_draw") and sceneLine:find("index_updates=6")
   and sceneLine:find("xr_wait_wall"),
   "per-stage CPU/wall, wait wall, and sampled eligible geometry must be reported")
 assert(gpuLine and gpuLine:find("source_scene_eye1") and gpuLine:find("frames=10%-10")
   and gpuLine:find("pending=2") and gpuLine:find("dropped=1"))
 assert(clientLine and clientLine:find("msm:no%-pdev:417895")
   and clientLine:find("busy_pct=50.0"))
-assert(bridge.gpuPolls == 2 and sampleIndex == 2,
+assert(bridge.gpuPolls == 3 and sampleIndex == 2,
   "readiness polling should run per frame while proc/sysfs sampling stays at 1 Hz")
 
 Telemetry.setScene("PEWTER_GYM/above", 12)
@@ -146,5 +147,50 @@ assert(not Telemetry.beginGpuScope("after_stop", "PEWTER_GYM/above"))
 Telemetry.recordFrame(14, { focused = true, shouldRender = true })
 assert(sampleIndex == samplesAfterStop,
   "stopping the bounded window must stop timestamp scopes and system-counter scans")
+
+-- Unattended rendering is measured only while its explicit native window is
+-- active; raw focus and shouldRender remain false in every emitted record.
+Telemetry.setScene("PEWTER_CITY/unattended", 15)
+assert(Telemetry.startWindow())
+local forcedStatus = { focused = false, shouldRender = false,
+  effectiveShouldRender = true, unattended = true, forceRenderActive = true,
+  forcedRender = true, poseSource = "synthetic-fixed-center",
+  ipdSource = "runtime" }
+Telemetry.recordFrame(15, forcedStatus)
+assert(Telemetry.beginGpuScope("source_scene_eye1", "PEWTER_CITY/unattended"))
+Telemetry.endGpuScope(true)
+Telemetry.recordSubmit()
+now.wallNs = now.wallNs + 1000000000
+now.processCpuNs = now.processCpuNs + 1200000000
+now.mainCpuNs = now.mainCpuNs + 700000000
+Telemetry.recordFrame(16, forcedStatus)
+local forcedLoad, forcedScene, forcedGpu
+for _, line in ipairs(lines) do
+  if line:find("%[vr%-telemetry%-load%]") and line:find("mode=unattended") then
+    forcedLoad = line
+  end
+  if line:find("scene=PEWTER_CITY/unattended") and line:find("measured_frames=2") then
+    forcedScene = line
+  end
+  if line:find("%[vr%-telemetry%-gpu%]") and line:find("mode=unattended") then
+    forcedGpu = line
+  end
+end
+assert(forcedLoad and forcedLoad:find("runtime_focused_frames=0")
+  and forcedLoad:find("runtime_should_render_frames=0")
+  and forcedLoad:find("effective_render_frames=2")
+  and forcedLoad:find("forced_render_frames=2")
+  and forcedLoad:find("pose_source=synthetic%-fixed%-center")
+  and forcedLoad:find("ipd_source=runtime"),
+  "unattended CPU/GPU load must retain raw runtime flags and synthetic-pose provenance")
+assert(forcedScene and forcedScene:find("mode=unattended")
+  and forcedScene:find("runtime_focused_frames=0")
+  and forcedScene:find("submits=1"),
+  "scene summaries must label actual forced work separately from raw focused frames")
+assert(forcedGpu and forcedGpu:find("force_render_mode=true")
+  and forcedGpu:find("force_render_window_active=true"),
+  "GPU timestamp summaries must carry unattended authorization tags")
+
+Telemetry.stopWindow()
 os.getenv, print = oldGetenv, oldPrint
 print("telemetry integration tests passed")

@@ -14,8 +14,20 @@ local bridge
 local state = {
   scene = "unknown",
   frame = 0,
-  renderable = false,
+  measurementActive = false,
   focused = false,
+  unattendedMode = false,
+  forceRenderWindowActive = false,
+  forcedRenderActive = false,
+  forcedRenderExpired = false,
+  forceRenderBlocked = false,
+  poseSource = "unavailable",
+  ipdSource = "unavailable",
+  windowRuntimeFocusedFrames = 0,
+  windowRuntimeShouldRenderFrames = 0,
+  windowEffectiveRenderFrames = 0,
+  windowForcedRenderFrames = 0,
+  windowUnattendedFrames = 0,
   armed = enabled,
   lastSampleWallNs = nil,
   lastSampleScene = nil,
@@ -149,7 +161,7 @@ function Telemetry.endStage(token)
 end
 
 function Telemetry.beginGpuScope(name, scene)
-  if not enabled or not state.armed or not bridge
+  if not enabled or not state.armed or not state.measurementActive or not bridge
       or type(bridge.gpuScopeBegin) ~= "function" then
     return false
   end
@@ -169,9 +181,33 @@ function Telemetry.recordFrame(frame, status)
   status = type(status) == "table" and status or {}
   state.frame = safeNumber(frame)
   state.focused = status.focused == true
-  state.renderable = state.focused and status.shouldRender == true
-  if not state.renderable then state.nonRenderableSinceSample = true end
-  if state.renderable and state.armed then
+  state.unattendedMode = status.unattendedMode == true
+    or status.unattended == true
+  state.forceRenderWindowActive = status.forceRenderActive == true
+  state.forcedRenderActive = status.forcedRender == true
+  state.forcedRenderExpired = status.forceRenderExpired == true
+  state.forceRenderBlocked = status.forceRenderBlocked == true
+  state.poseSource = status.poseSource or "unavailable"
+  state.ipdSource = status.ipdSource or "unavailable"
+  local runtimeShouldRender = status.shouldRender == true
+  local effectiveShouldRender = status.effectiveShouldRender == true
+    or runtimeShouldRender
+  local forcedUnattendedRendering = state.unattendedMode
+    and state.forceRenderWindowActive and effectiveShouldRender
+  state.measurementActive = (state.focused and runtimeShouldRender)
+    or forcedUnattendedRendering
+  state.windowRuntimeFocusedFrames = state.windowRuntimeFocusedFrames
+    + (state.focused and 1 or 0)
+  state.windowRuntimeShouldRenderFrames = state.windowRuntimeShouldRenderFrames
+    + (runtimeShouldRender and 1 or 0)
+  state.windowEffectiveRenderFrames = state.windowEffectiveRenderFrames
+    + (effectiveShouldRender and 1 or 0)
+  state.windowForcedRenderFrames = state.windowForcedRenderFrames
+    + (state.forcedRenderActive and 1 or 0)
+  state.windowUnattendedFrames = state.windowUnattendedFrames
+    + (state.unattendedMode and 1 or 0)
+  if not state.measurementActive then state.nonRenderableSinceSample = true end
+  if state.measurementActive and state.armed then
     local bucket = bucketFor(state.scene)
     bucket.frames = bucket.frames + 1
     if not bucket.firstFrame then bucket.firstFrame = state.frame end
@@ -180,13 +216,22 @@ function Telemetry.recordFrame(frame, status)
       bucket.xrWaitWall[#bucket.xrWaitWall + 1] = status.xrWaitWallNs
       bucket.xrWaitCpu[#bucket.xrWaitCpu + 1] = safeNumber(status.xrWaitMainCpuNs)
     end
+    bucket.unattended = state.unattendedMode
+    bucket.runtimeFocusedFrames = (bucket.runtimeFocusedFrames or 0)
+      + (state.focused and 1 or 0)
+    bucket.runtimeShouldRenderFrames = (bucket.runtimeShouldRenderFrames or 0)
+      + (runtimeShouldRender and 1 or 0)
+    bucket.effectiveRenderFrames = (bucket.effectiveRenderFrames or 0)
+      + (effectiveShouldRender and 1 or 0)
+    bucket.forcedRenderFrames = (bucket.forcedRenderFrames or 0)
+      + (state.forcedRenderActive and 1 or 0)
     collectCuller(bucket)
   end
   Telemetry.sample()
 end
 
 function Telemetry.recordSubmit()
-  if not enabled or not state.armed or not state.renderable then return end
+  if not enabled or not state.armed or not state.measurementActive then return end
   bucketFor(state.scene).submitted = bucketFor(state.scene).submitted + 1
 end
 
@@ -199,6 +244,11 @@ function Telemetry.startWindow()
   state.lastSampleScene = nil
   state.sceneChangesSinceSample = 0
   state.nonRenderableSinceSample = false
+  state.windowRuntimeFocusedFrames = 0
+  state.windowRuntimeShouldRenderFrames = 0
+  state.windowEffectiveRenderFrames = 0
+  state.windowForcedRenderFrames = 0
+  state.windowUnattendedFrames = 0
   if bridge and type(bridge.telemetrySample) == "function" then
     -- Establish fresh CPU/DRM counter baselines without admitting warmup.
     pcall(bridge.telemetrySample)
@@ -231,14 +281,20 @@ local function printSceneBuckets(loadSample, windowScene)
         milliseconds(percentile(bucket.xrWaitWall, 0.95)))
       local waitCpu = string.format("n=%d p50_ms=%s",
         #bucket.xrWaitCpu, milliseconds(percentile(bucket.xrWaitCpu, 0.50)))
+      local mode = bucket.unattended and "unattended" or "focused"
       local stages = {}
       for name, values in pairs(bucket.stages) do
         stages[#stages + 1] = name .. "{" .. stageSummary(values) .. "}"
       end
       table.sort(stages)
       print("[vr-telemetry]", "scene=" .. scene,
+        "mode=" .. mode,
         "frame=" .. tostring(bucket.firstFrame or state.firstFrame) .. "-" .. tostring(bucket.lastFrame or state.frame),
-        "renderable_frames=" .. tostring(bucket.frames),
+        "measured_frames=" .. tostring(bucket.frames),
+        "runtime_focused_frames=" .. tostring(bucket.runtimeFocusedFrames or 0),
+        "runtime_should_render_frames=" .. tostring(bucket.runtimeShouldRenderFrames or 0),
+        "effective_render_frames=" .. tostring(bucket.effectiveRenderFrames or 0),
+        "forced_render_frames=" .. tostring(bucket.forcedRenderFrames or 0),
         "submits=" .. tostring(bucket.submitted),
         "xr_wait_wall{" .. waitWall .. "}",
         "xr_wait_main_cpu{" .. waitCpu .. "}",
@@ -249,7 +305,22 @@ local function printSceneBuckets(loadSample, windowScene)
   end
 end
 
-local function printGpuTimestamps(sample, fallbackScene)
+local function modeTags()
+  local mode = state.windowUnattendedFrames > 0 and "unattended" or "focused"
+  return "mode=" .. mode,
+    "force_render_mode=" .. tostring(state.unattendedMode),
+    "force_render_window_active=" .. tostring(state.forceRenderWindowActive),
+    "runtime_focused_frames=" .. tostring(state.windowRuntimeFocusedFrames),
+    "runtime_should_render_frames=" .. tostring(state.windowRuntimeShouldRenderFrames),
+    "effective_render_frames=" .. tostring(state.windowEffectiveRenderFrames),
+    "forced_render_frames=" .. tostring(state.windowForcedRenderFrames),
+    "force_render_expired=" .. tostring(state.forcedRenderExpired),
+    "force_render_blocked=" .. tostring(state.forceRenderBlocked),
+    "pose_source=" .. tostring(state.poseSource),
+    "ipd_source=" .. tostring(state.ipdSource)
+end
+
+local function printGpuTimestamps(sample, fallbackScene, tags)
   local groups = {}
   for _, item in ipairs(sample.gpuTimestamps or {}) do
     if item.frame >= state.firstFrame then
@@ -271,7 +342,7 @@ local function printGpuTimestamps(sample, fallbackScene)
         milliseconds(percentile(values.values, 0.95)), values.firstFrame, values.lastFrame)
     end
     table.sort(summaries)
-    print("[vr-telemetry-gpu]", "scene=" .. scene,
+    print("[vr-telemetry-gpu]", "scene=" .. scene, tags,
       "frames=" .. tostring(state.firstFrame) .. "-" .. tostring(state.frame),
       "query_status=" .. tostring(sample.gpuTimestampStatus),
       "pending=" .. tostring(sample.gpuTimestampPending),
@@ -281,7 +352,7 @@ local function printGpuTimestamps(sample, fallbackScene)
       table.concat(summaries, ";"))
   end
   if not next(groups) then
-    print("[vr-telemetry-gpu]", "scene=" .. tostring(fallbackScene),
+    print("[vr-telemetry-gpu]", "scene=" .. tostring(fallbackScene), tags,
       "frames=" .. tostring(state.firstFrame) .. "-" .. tostring(state.frame),
       "query_status=" .. tostring(sample.gpuTimestampStatus),
       "pending=" .. tostring(sample.gpuTimestampPending),
@@ -307,11 +378,13 @@ function Telemetry.sample()
   if not ok or type(sample) ~= "table" then return end
 
   local stableScene = state.sceneChangesSinceSample == 0
-      and not state.nonRenderableSinceSample and state.renderable
+      and not state.nonRenderableSinceSample and state.measurementActive
   local windowScene = stableScene and state.scene or "transition-or-unrenderable"
+  local tags = { modeTags() }
+  local tagsText = table.concat(tags, " ")
   if state.armed and stableScene and sample.intervalWallNs > 0 then
     local wall = sample.intervalWallNs
-    print("[vr-telemetry-load]", "scene=" .. windowScene,
+    print("[vr-telemetry-load]", "scene=" .. windowScene, tagsText,
       "window_wall_ms=" .. milliseconds(wall),
       "process_cpu_pct=" .. string.format("%.1f", sample.processCpuNs * 100 / wall),
       "main_thread_cpu_pct=" .. string.format("%.1f", sample.mainCpuNs * 100 / wall),
@@ -326,7 +399,7 @@ function Telemetry.sample()
       "gpu_max_mhz=" .. (sample.gpuMaxFreqHz and sample.gpuMaxFreqHz > 0
         and string.format("%.0f", sample.gpuMaxFreqHz / 1000000) or "unavailable"))
     for _, client in ipairs(sample.gpuClients or {}) do
-      print("[vr-telemetry-gpu-client]", "scene=" .. windowScene,
+      print("[vr-telemetry-gpu-client]", "scene=" .. windowScene, tagsText,
         "identity=" .. tostring(client.identity), "driver=" .. tostring(client.driver),
         "busy_pct=" .. (client.busyPct and string.format("%.1f", client.busyPct) or "warming"),
         "cycles=" .. tostring(client.cycles or "unavailable"),
@@ -337,6 +410,7 @@ function Telemetry.sample()
     local reason = state.nonRenderableSinceSample
         and "focus-or-render-loss" or "scene-transition"
     print("[vr-telemetry]", "window=excluded", "reason=" .. reason,
+      tagsText,
       "scene=" .. tostring(windowScene),
       "cpu_interval_scene=" .. tostring(windowScene))
   end
@@ -345,11 +419,16 @@ function Telemetry.sample()
     -- excludes interval utilization without discarding useful per-scene work.
     printSceneBuckets(sample, windowScene)
   end
-  if state.armed then printGpuTimestamps(sample, windowScene) end
+  if state.armed then printGpuTimestamps(sample, windowScene, tagsText) end
   state.buckets = {}
   state.sceneChangesSinceSample = 0
   state.nonRenderableSinceSample = false
   state.lastSampleScene = state.scene
+  state.windowRuntimeFocusedFrames = 0
+  state.windowRuntimeShouldRenderFrames = 0
+  state.windowEffectiveRenderFrames = 0
+  state.windowForcedRenderFrames = 0
+  state.windowUnattendedFrames = 0
 end
 
 return Telemetry

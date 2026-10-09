@@ -457,8 +457,9 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
   if not rawPosition then rawPosition = readVector(rawView) end
 
   local result = copyTable(fallback)
-  local positionValid = rawView.positionValid ~= false
-  local orientationValid = rawView.orientationValid ~= false
+  local derivedPoseUsable = rawView.poseUsable == true
+  local positionValid = derivedPoseUsable or rawView.positionValid ~= false
+  local orientationValid = derivedPoseUsable or rawView.orientationValid ~= false
   local orientation = readQuaternion(rawView.orientation)
   if not orientation and type(pose) == "table" then
     orientation = readQuaternion(pose.orientation)
@@ -566,11 +567,15 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
 end
 
 local function establishPoseOrigin(left, right, center)
+  local leftDerivedPoseUsable = type(left) == "table"
+    and left.poseUsable == true
+  local rightDerivedPoseUsable = type(right) == "table"
+    and right.poseUsable == true
   local leftPosition = type(left) == "table"
-    and left.positionValid ~= false
+    and (leftDerivedPoseUsable or left.positionValid ~= false)
     and (readVector(left.position) or readVector(left.location)) or nil
   local rightPosition = type(right) == "table"
-    and right.positionValid ~= false
+    and (rightDerivedPoseUsable or right.positionValid ~= false)
     and (readVector(right.position) or readVector(right.location)) or nil
   local position
   if leftPosition and rightPosition then
@@ -584,10 +589,10 @@ local function establishPoseOrigin(left, right, center)
   end
 
   local orientation = type(left) == "table"
-    and left.orientationValid ~= false
+    and (leftDerivedPoseUsable or left.orientationValid ~= false)
     and readQuaternion(left.orientation) or nil
   if not orientation and type(right) == "table"
-     and right.orientationValid ~= false then
+     and (rightDerivedPoseUsable or right.orientationValid ~= false) then
     orientation = readQuaternion(right.orientation)
   end
   local origin = state.poseOrigin or {}
@@ -701,7 +706,12 @@ local function resetXrFrameClock()
 end
 
 local function updateXrFrameClock(native)
-  if not native or native.focused ~= true or native.shouldRender ~= true then
+  local ordinaryRendering = native and native.focused == true
+    and native.shouldRender == true
+  local forcedUnattendedRendering = native and native.unattended == true
+    and native.forceRenderActive == true
+    and native.effectiveShouldRender == true
+  if not ordinaryRendering and not forcedUnattendedRendering then
     resetXrFrameClock()
     return
   end
@@ -739,7 +749,11 @@ end
 function Runtime.shouldSimulate()
   if not state.bridgeActive then return true end
   local native = refreshNativeStatus() or {}
-  local active = native.focused == true and native.shouldRender == true
+  local ordinaryRendering = native.focused == true and native.shouldRender == true
+  local forcedUnattendedRendering = native.unattended == true
+    and native.forceRenderActive == true
+    and native.effectiveShouldRender == true
+  local active = ordinaryRendering or forcedUnattendedRendering
   if not active then resetXrFrameClock() end
   return active
 end
@@ -878,7 +892,7 @@ function Runtime.beginFrame(width, height)
   end
   if diagnostics then
     local telemetryStatus = copyTable(state.nativeStatus)
-    telemetryStatus.shouldRender = state.shouldRender
+    telemetryStatus.effectiveShouldRender = state.shouldRender
     diagnostics.recordFrame(state.frame, telemetryStatus)
   end
   return true

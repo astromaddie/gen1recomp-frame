@@ -13,6 +13,63 @@
 
 namespace vrtelemetry {
 
+class ForcedRenderWindow {
+public:
+    static constexpr uint64_t kMaxDurationSeconds = 120;
+
+    void arm(bool telemetryEnabled, bool requested, uint64_t startNs,
+             uint64_t durationSeconds) {
+        m_requested = telemetryEnabled && requested;
+        m_armed = false;
+        m_expired = false;
+        m_startedAtNs = startNs;
+        m_deadlineNs = startNs;
+        m_durationNs = 0;
+        if (!m_requested) return;
+        if (durationSeconds == 0) {
+            m_expired = true;
+            return;
+        }
+        durationSeconds = std::min(durationSeconds, kMaxDurationSeconds);
+        m_durationNs = durationSeconds * 1000000000ull;
+        m_deadlineNs = startNs > UINT64_MAX - m_durationNs
+            ? UINT64_MAX : startNs + m_durationNs;
+        m_armed = true;
+    }
+
+    bool active(uint64_t nowNs) {
+        if (!m_armed) return false;
+        if (nowNs >= m_deadlineNs) {
+            m_armed = false;
+            m_expired = true;
+            return false;
+        }
+        return true;
+    }
+
+    bool allows(bool runtimeShouldRender, uint64_t nowNs) {
+        return runtimeShouldRender || active(nowNs);
+    }
+
+    bool overrides(bool runtimeShouldRender, uint64_t nowNs) {
+        return !runtimeShouldRender && active(nowNs);
+    }
+
+    bool requested() const { return m_requested; }
+    bool expired() const { return m_expired; }
+    uint64_t startedAtNs() const { return m_startedAtNs; }
+    uint64_t deadlineNs() const { return m_deadlineNs; }
+    uint64_t durationNs() const { return m_durationNs; }
+
+private:
+    bool m_requested = false;
+    bool m_armed = false;
+    bool m_expired = false;
+    uint64_t m_startedAtNs = 0;
+    uint64_t m_deadlineNs = 0;
+    uint64_t m_durationNs = 0;
+};
+
 struct TimestampResult {
     std::string name;
     std::string scene;

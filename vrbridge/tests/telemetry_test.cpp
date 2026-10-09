@@ -45,6 +45,25 @@ static vrtelemetry::DrmClientCounters client(const char* text) {
 }
 
 int main() {
+    vrtelemetry::ForcedRenderWindow forcedRender;
+    forcedRender.arm(false, true, 100, 120);
+    assert(!forcedRender.requested() && !forcedRender.allows(false, 100));
+    assert(forcedRender.allows(true, 100) && !forcedRender.expired());
+    forcedRender.arm(true, false, 100, 120);
+    assert(!forcedRender.requested() && !forcedRender.allows(false, 100));
+    forcedRender.arm(true, true, 100, 1000);
+    assert(forcedRender.requested());
+    assert(forcedRender.durationNs() == 120000000000ull);
+    assert(forcedRender.allows(false, 119999999999ull));
+    assert(forcedRender.overrides(false, 119999999999ull));
+    assert(!forcedRender.allows(false, 120000000100ull));
+    assert(forcedRender.expired() && !forcedRender.overrides(false, 120000000100ull));
+    assert(forcedRender.allows(true, 120000000100ull));
+    forcedRender.arm(true, true, 500, 3);
+    assert(forcedRender.durationNs() == 3000000000ull);
+    assert(forcedRender.allows(false, 2999999999ull));
+    assert(!forcedRender.allows(false, 3000000500ull));
+
     using Ring = vrtelemetry::TimestampRing<1>;
     FakeTimestampBackend unsupportedBackend;
     unsupportedBackend.support = false;

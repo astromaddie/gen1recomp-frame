@@ -189,6 +189,19 @@ reported only when available. Frequency is not a utilization measure. Missing
 busy counters remain unavailable. No CPU/GPU diagnosis or new performance
 acceptance has been made from these diagnostics yet.
 
+For a short off-headset diagnostic only, `POKEPORT_XR_FORCE_RENDER=1` together
+with `POKEPORT_VR_TELEMETRY=1` authorizes rendering while the runtime reports
+`shouldRender=false`. The authorization starts after XR initialization and
+expires within 120 seconds; `POKEPORT_XR_FORCE_RENDER_SECONDS` may shorten it.
+Raw runtime `focused` and `shouldRender` values remain unchanged in status and
+logs. Forced frames use real runtime eye positions only after a stable pose is
+observed, otherwise a fixed synthetic center/orientation with eye separation
+measured from valid runtime views; rendering stays blocked if no valid eye
+separation is available. Runtime asymmetric FOV is preserved. Every affected
+summary is tagged `mode=unattended`, including raw/effective frame counts and
+pose/IPD source. These are unattended renderer measurements and do not claim
+wearer-focused performance. Leave both flags unset for ordinary play.
+
 A read-only pose review found locate/render/submit using the same predicted pose
 and time. Conditional tracking risks remain unmeasured: the small head-translation
 clamp, invalid-pose fallback versus native submission, and reference-space changes.
