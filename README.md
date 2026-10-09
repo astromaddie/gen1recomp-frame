@@ -66,6 +66,13 @@ graphics-state restoration and rejection of non-Canvas userdata. An isolated
 copy of the user's Yellow save passed the production Continue path and rendered
 its saved Pewter City location; the original save and backup were unchanged.
 
-These host results do not establish SteamVR presentation or worn acceptance.
+The native kit has also been installed and launched through Steam on Frame.
+The ROM-free probe reached focused SteamVR/OpenXR operation, used sRGB
+1728 x 1728 eye swapchains, and logged 1,588 projection submissions without a
+submission failure. Its copied left/right eye pixels exactly matched the
+source Canvases, and the wearer confirmed clear patterns in both eyes. The
+native game restored the copied Yellow save in flat mode and completed a short
+focused VR saved-scene run with 300 projection submissions and no bridge error.
+These short runs do not establish sustained gameplay performance or comfort.
 Current device evidence and remaining gates are recorded in
 [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).

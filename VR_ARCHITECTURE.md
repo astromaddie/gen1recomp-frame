@@ -29,8 +29,8 @@ D-pad provide normal game input. No OS keyboard injection is used.
 | Native source and ABI | ARM64 bridge/runtime builds; Lua integration tests; ELF/closure/ABI receipts | Host passed |
 | GPU Canvas copy | Actual pinned LÖVE/Xvfb pixel/state/type tests | Host passed |
 | Flat game and real save | Red Pallet Town; copied Yellow Continue at Pewter City (22,19), voxel render | Host passed |
-| OpenXR colour probe | Runtime, format, GL context, eyes, frame cadence and projection submission | Pending device |
-| Actual game on Frame | Saved scene, projection/stereo render, stable runtime logs | Pending device |
+| OpenXR colour probe | SteamVR/OpenXR + Zink GL 4.3, sRGB 1728 x 1728 eyes, 1,588 logged submissions, exact copied pixels; wearer confirmed clear patterns | Device and wearer passed |
+| Actual game on Frame | Copied Yellow save at Pewter City (22,19): native flat render; focused VR run with 300 submissions and no bridge error | Short run passed; settled stereo-eye capture pending |
 | Physical input and camera modes | A/B, stick, Menu, View/recentre, launcher selection and voxel Options | Pending wearer |
 | Presentation/comfort | 0/90/180 yaw, lean, readable menus, view scale, eye alignment | Pending wearer |
 | Audio, sustained performance, sleep/resume | Gameplay session and power-button sleep/recovery | Pending device/wearer |
@@ -48,3 +48,28 @@ Known limits: battles and dialogue retain the reference mono presentation;
 current upstream Gen 2/3 and arbitrary Mac mods are outside this pinned port.
 No new comfort/settings UI, hand interaction, haptic confirmation or full
 campaign acceptance has been established.
+
+## Device verification on 2026-10-09
+
+The Frame installation uses Steam shortcut `Gen1RecompFrame` (AppID
+2767704292), with `steam_play=0` and `SteamLinuxRuntime_4-arm64`. The native
+bridge binary SHA-256 is
+`be1a34471defee8e8194f2fea25d1c059ea8d3c3e625254a97a26e0c91a99310`.
+The install check verified all 60 kit hashes, all 381 private assembly hashes,
+and native dependency resolution before launch. The copied Yellow save hash
+matched its Mac source. The original Mac save and backup retained their bytes,
+size, permissions and modification times.
+
+Probe display timing was 13,888,889 ns (72 Hz), not a sustained gameplay FPS
+measurement. The first gameplay eye capture was taken on the existing mod
+load report, so it verifies mono UI copying. A later overworld capture is still
+required to close the stereo image gate. The driver screenshot shows the voxel
+scene, and the short VR run's completion status was focused with 300 submitted
+frames, two eye dumps and no bridge error.
+
+The native Steam shortcut did not propagate the devkit `-env.json` diagnostic
+values in this test. Diagnostic runs therefore used a temporary shell wrapper
+that exported their values and executed the unchanged launcher through Steam.
+Normal play must use `tools/LAUNCH-STEAM-FRAME.sh` with no test driver or dump
+settings. The devkit's empty `env` argument does not clear an old environment
+file; clear this title's file explicitly when restoring normal play.
