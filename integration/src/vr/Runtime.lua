@@ -290,12 +290,12 @@ local state = {
   pendingSubmit = nil,
   lastError = nil,
   nativeStatus = nil,
-  cameraSetbackMeters = 0.75,
+  cameraSetbackMeters = 0,
 }
 
 do
   local ok, value = pcall(function() return os.getenv("POKEPORT_VR_CAMERA_SETBACK_METERS") end)
-  value = ok and tonumber(value) or 0.75
+  value = ok and tonumber(value) or 0
   if finiteNumber(value) then state.cameraSetbackMeters = math.max(0, math.min(3, value)) end
 end
 
@@ -332,31 +332,64 @@ local function loadBridge()
   if state.bridgeAttempted then return state.bridge end
   state.bridgeAttempted = true
 
-  local ok, candidate
+  local candidate, failure
   local explicitPath
   pcall(function()
     explicitPath = os and os.getenv and os.getenv("POKEPORT_XRBRIDGE")
   end)
-  if explicitPath and explicitPath ~= ""
-     and package and type(package.loadlib) == "function" then
-    local loaded, factory = pcall(package.loadlib, explicitPath,
-                                   "luaopen_xrbridge")
-    if loaded and type(factory) == "function" then
-      ok, candidate = pcall(factory)
+  if explicitPath and explicitPath ~= "" then
+    if not package or type(package.loadlib) ~= "function" then
+      failure = "package.loadlib is unavailable for " .. explicitPath
     else
-      ok, candidate = false, factory
+      local loaded, factory, loadError = pcall(package.loadlib, explicitPath,
+                                               "luaopen_xrbridge")
+      if not loaded then
+        failure = factory
+      elseif type(factory) ~= "function" then
+        failure = loadError or factory
+          or "package.loadlib returned no factory or diagnostic"
+      else
+        local called, value, factoryError = pcall(factory)
+        if not called then
+          failure = value
+        elseif type(value) ~= "table" then
+          failure = factoryError or "xrbridge factory did not return a table"
+        else
+          candidate = value
+        end
+      end
     end
   else
-    ok, candidate = pcall(require, "xrbridge")
+    local loaded, value = pcall(require, "xrbridge")
+    if loaded then candidate = value else failure = value end
   end
-  if not ok then
+
+  if failure then
     -- Absence is the normal desktop path; keep it as diagnostic state rather
     -- than as a runtime error that callers must handle.
-    state.bridgeError = errorText(candidate)
+    state.bridgeError = errorText(failure)
+    local required = false
+    pcall(function()
+      required = os and os.getenv and os.getenv("POKEPORT_VR_REQUIRED") == "1"
+    end)
+    if (explicitPath and explicitPath ~= "") or required then
+      pcall(function()
+        if io and io.stderr then
+          io.stderr:write("[vr] xrbridge load failed: " .. state.bridgeError .. "\n")
+        end
+      end)
+    end
     return nil
   end
   if type(candidate) ~= "table" then
-    state.bridgeError = "module did not return a table"
+    state.bridgeError = "xrbridge module did not return a table"
+    if (explicitPath and explicitPath ~= "") then
+      pcall(function()
+        if io and io.stderr then
+          io.stderr:write("[vr] xrbridge load failed: " .. state.bridgeError .. "\n")
+        end
+      end)
+    end
     return nil
   end
   state.bridge = candidate

@@ -80,6 +80,18 @@ int main() {
     assert((backend.destroyed.size() == 2 &&
             "shutdown must release both query objects for every allocated slot"));
 
+    FakeTimestampBackend cancelledBackend;
+    Ring cancelled;
+    assert(cancelled.begin(cancelledBackend, "cancelled", 4, "map/above"));
+    cancelled.cancelActive();
+    assert(cancelled.pending() == 0 && cancelled.errors() == 1);
+    assert(cancelled.begin(cancelledBackend, "after-cancel", 5, "map/above"));
+    cancelled.end(cancelledBackend);
+    for (const auto& item : cancelledBackend.values)
+        cancelledBackend.ready.insert(item.first);
+    assert(cancelled.poll(cancelledBackend).size() == 1);
+    cancelled.release(cancelledBackend);
+
     using PollRing = vrtelemetry::TimestampRing<4>;
     FakeTimestampBackend pollBackend;
     PollRing pollRing;

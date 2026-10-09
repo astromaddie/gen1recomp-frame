@@ -1,5 +1,9 @@
 local bridge
 local finished = false
+local telemetryScopePending = false
+local telemetryScopeStarted = 0
+local telemetryLastSample = 0
+local telemetryKeepalive = {}
 
 local function requireTest(condition, message)
   if not condition then
@@ -145,20 +149,68 @@ function love.load()
    end
   end
 
+  if os.getenv("POKEPORT_VR_TELEMETRY") == "1" then
+    local opened = bridge.gpuScopeBegin("source_scene_eye1", 42,
+                                        "TELEMETRY_TEST/above")
+    requireTest(opened,
+      "native timer-query scope did not open in the real LOVE GL context")
+    love.graphics.setCanvas(source)
+    love.graphics.clear(0, 0, 0, 1)
+    love.graphics.setColor(1, 0, 0, 1)
+    for i = 0, 63 do
+      love.graphics.rectangle("fill", i % 16, math.floor(i / 16), 1, 1)
+    end
+    love.graphics.setCanvas()
+    bridge.gpuScopeEnd()
+    telemetryScopePending = true
+    telemetryScopeStarted = love.timer.getTime()
+    telemetryLastSample = telemetryScopeStarted
+  end
+
   print("CANVAS_COPY_TEST_PASS: OpenXR bottom-left orientation, content, scissor, color mask, type guard")
-  source:release()
-  target:release()
+  if telemetryScopePending then
+    telemetryKeepalive = { source, target }
+  else
+    source:release()
+    target:release()
+  end
   finished = true
-  love.event.quit(0)
+  if not telemetryScopePending then love.event.quit(0) end
 end
 
 function love.update()
+  if telemetryScopePending then
+    bridge.telemetryPollGpu()
+    local now = love.timer.getTime()
+    if now - telemetryLastSample >= 0.1 then
+      telemetryLastSample = now
+      local sample = bridge.telemetrySample()
+      for _, item in ipairs(sample.gpuTimestamps or {}) do
+        if item.name == "source_scene_eye1"
+            and item.scene == "TELEMETRY_TEST/above" and item.frame == 42 then
+          requireTest(item.durationNs > 0,
+            "timestamp scope around queued LOVE draws must have positive elapsed time")
+          print("GPU_TIMESTAMP_SCOPE_TEST_PASS: LOVE flushBatch bracketed 64 queued draws")
+          telemetryScopePending = false
+          for _, canvas in ipairs(telemetryKeepalive) do canvas:release() end
+          telemetryKeepalive = {}
+          love.event.quit(0)
+          return
+        end
+      end
+      requireTest(sample.gpuTimestampStatus ~= "error",
+        "native timer-query scope reported an asynchronous query error")
+      requireTest(now - telemetryScopeStarted < 5,
+        "native timer-query result did not become available asynchronously")
+    end
+    return
+  end
   if finished then love.event.quit(0) end
 end
 
 function love.draw() end
 
 function love.errorhandler(message)
-  io.stderr:write(tostring(message) .. "\n")
+  io.stderr:write(debug.traceback(tostring(message), 2) .. "\n")
   return function() return 1 end
 end

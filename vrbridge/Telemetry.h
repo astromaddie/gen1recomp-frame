@@ -338,6 +338,14 @@ public:
         m_dropped = 0;
         m_errors = 0;
     }
+    void noteError() { ++m_errors; }
+    void cancelActive() {
+        if (m_active < 0) return;
+        Slot& slot = m_slots[static_cast<size_t>(m_active)];
+        slot.recording = false;
+        m_active = -1;
+        ++m_errors;
+    }
 
 private:
     struct Slot {

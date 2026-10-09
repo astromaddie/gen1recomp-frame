@@ -92,7 +92,8 @@ def main():
               lambda rel: rel in {
                   'build-runtime.sh', 'export-runtime.sh', 'fetch-runtime-sources.py',
                   'fetch-private-sources.py', 'assemble-local.py', 'LAUNCH-STEAM-FRAME.sh',
-                  'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py'
+                  'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py',
+                  'native-module-smoke/main.lua', 'native-module-smoke/conf.lua'
               })
     copy_file(runtime_root / 'runtime-image.json', output / 'RUNTIME-IMAGE.json', inventory)
     bridge_report_path = bridge.with_name('xrbridge.build.json')
@@ -108,7 +109,11 @@ def main():
     if bridge_report.get('artifacts', {}).get('xrbridge-dependency-closure.txt') != sha256(bridge_deps_path):
         raise SystemExit('xrbridge dependency closure does not match its build report')
     checks = bridge_report.get('checks', {})
-    if checks.get('elf_architecture') != 'aarch64' or checks.get('unresolved_dependencies') or checks.get('abi_ceilings_passed') is not True:
+    if (checks.get('elf_architecture') != 'aarch64'
+            or checks.get('unresolved_dependencies')
+            or checks.get('abi_ceilings_passed') is not True
+            or checks.get('native_module_import_passed') is not True
+            or checks.get('native_module_import_sha256') != sha256(bridge)):
         raise SystemExit('xrbridge build report does not confirm clean ARM64 dependency and ABI checks')
     if bridge_report.get('runtime_image_id') != json.loads((runtime_root / 'runtime-image.json').read_text()).get('image_id'):
         raise SystemExit('xrbridge and LOVE runtime were not built from the same image')

@@ -99,6 +99,7 @@ read the pinned player-local voxel renderer; they do not alter it or need ROMs:
 POKEPORT_XRBRIDGE=fake luajit integration/tests/presentation_test.lua \
   integration/src/vr /path/to/private-local-assembly/game/mods/DRAMALESS_SHAPE
 POKEPORT_XRBRIDGE=fake luajit integration/tests/runtime_test.lua integration/src/vr/Runtime.lua
+luajit integration/tests/runtime_loader_test.lua integration/src/vr/Runtime.lua
 luajit integration/tests/telemetry_test.lua integration/src/vr/Telemetry.lua
 luajit integration/tests/runtime_telemetry_test.lua integration/src/vr/Runtime.lua
 luajit integration/tests/vr_telemetry_driver_test.lua integration/tests/vr_telemetry_driver.lua
@@ -112,7 +113,11 @@ With `POKEPORT_XRBRIDGE` pointing to it, run `love integration/tests/canvas_copy
 under Xvfb both without diagnostics (MSAA, unreadable and scaled copies) and
 with `POKEPORT_XR_PROBE_DUMP_DIR` set to a fresh directory (one-shot PPM
 orientation/readback-state checks). The original native copy fails the
-OpenXR-origin expectation.
+OpenXR-origin expectation. Set `POKEPORT_VR_TELEMETRY=1` for an additional
+asynchronous timestamp-query test that brackets 64 real LÖVE-batched draws.
+The normal ARM64 bridge build also runs an Xvfb `package.loadlib` factory smoke
+against the exported runtime without creating an OpenXR instance, and rejects
+unresolved dynamic symbols with `ldd -r`.
 
 For the rendered mono regression, set `POKEPORT_TEST_KIT` to this checkout,
 `POKEPORT_TEST_OUTPUT` to a fresh evidence directory, and

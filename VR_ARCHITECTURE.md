@@ -49,11 +49,11 @@ surf bob and spinner timers inside `pose`; both eye passes now see the same
 result. Flat rendering, updates and NPC pose methods remain unchanged. This
 correctness fix is not evidence of a stationary-scene performance improvement.
 
-Optional `POKEPORT_VR_CAMERA_SETBACK_METERS` (0–3, default 0.75) translates ABOVE
+Optional `POKEPORT_VR_CAMERA_SETBACK_METERS` (0–3, default 0) translates ABOVE
 and third-person eye/focus backward along the existing view direction, preserving
 orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The wearer
-accepted the 0.75 m distance during the 1024-square test; explicit zero restores
-the original distance. Native recommended eye dimensions
+accepted an explicitly requested 0.75 m distance during the 1024-square test;
+explicit zero or the default preserves the original distance. Native recommended eye dimensions
 remain the default; no lower resolution has been adopted.
 
 ## DRAMALESS source replacement (2026-10-09)

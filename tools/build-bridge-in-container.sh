@@ -28,9 +28,10 @@ if not within(glibcxx, (3, 4, 30)):
     raise SystemExit(f'GLIBCXX ABI exceeds 3.4.30: {glibcxx}')
 closure_path = '/out/xrbridge-dependency-closure.txt'
 env = {'PATH': '/usr/bin:/bin', 'LD_LIBRARY_PATH': '/runtime/runtime/lib'}
-result = subprocess.run(['ldd', path], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+result = subprocess.run(['ldd', '-r', path], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 with open(closure_path, 'w') as f: f.write(result.stdout)
-if result.returncode or 'not found' in result.stdout or '/usr/local/' in result.stdout:
+if (result.returncode or 'not found' in result.stdout
+        or 'undefined symbol:' in result.stdout or '/usr/local/' in result.stdout):
     raise SystemExit(f'isolated bridge dependency closure failed; see {closure_path}')
 with open('/out/xrbridge-checks.json', 'w') as f:
     json.dump({
@@ -48,3 +49,22 @@ with open('/out/xrbridge-checks.json', 'w') as f:
         },
     }, f, indent=2)
 PYABI
+
+# Verify relocation against the exact runtime export and execute the module
+# factory through LÖVE's real package.loadlib path without starting OpenXR.
+env PATH=/usr/bin:/bin \
+  LD_LIBRARY_PATH=/runtime/runtime/lib:/usr/local/lib \
+  SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 \
+  POKEPORT_XRBRIDGE=/out/xrbridge.so POKEPORT_VR_TELEMETRY=1 \
+  timeout 30s xvfb-run -a -s '-screen 0 1280x1024x24' \
+    /runtime/runtime/bin/love /kit/tools/native-module-smoke
+python3 - /out/xrbridge.so /out/xrbridge-checks.json <<'PYSMOKE'
+import hashlib, json, sys
+from pathlib import Path
+binary = Path(sys.argv[1])
+receipt = Path(sys.argv[2])
+checks = json.loads(receipt.read_text())
+checks['checks']['native_module_import_passed'] = True
+checks['checks']['native_module_import_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
+receipt.write_text(json.dumps(checks, indent=2) + '\n')
+PYSMOKE

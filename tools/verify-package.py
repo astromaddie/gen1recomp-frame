@@ -36,6 +36,10 @@ if bridge_build.get('runtime_image_id') != metadata.get('runtime_build', {}).get
     raise SystemExit('native bridge and runtime image identities differ')
 if bridge_build.get('checks', {}).get('abi_ceilings_passed') is not True:
     raise SystemExit('native bridge ABI ceilings were not verified')
+if bridge_build.get('checks', {}).get('native_module_import_passed') is not True:
+    raise SystemExit('native bridge did not pass the LÖVE package.loadlib import smoke')
+if bridge_build.get('checks', {}).get('native_module_import_sha256') != hashlib.sha256((root / 'xrbridge.so').read_bytes()).hexdigest():
+    raise SystemExit('LÖVE import smoke does not match the packaged native bridge binary')
 for rel in ('vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
             'vrbridge/Telemetry.h'):
     if bridge_build.get('source', {}).get('files', {}).get(rel) != hashlib.sha256((root / rel).read_bytes()).hexdigest():
@@ -48,7 +52,8 @@ if license_files != metadata.get('license_inventory'):
 tool_files = {
     'build-runtime.sh', 'export-runtime.sh', 'fetch-runtime-sources.py',
     'fetch-private-sources.py', 'assemble-local.py', 'LAUNCH-STEAM-FRAME.sh',
-    'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py'
+    'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py',
+    'native-module-smoke/main.lua', 'native-module-smoke/conf.lua'
 }
 license_files_expected = {
     'LOVE.txt', 'libluajit-5.1-2.copyright', 'libmodplug1.copyright',

@@ -69,10 +69,10 @@ Custom Mac mods are not automatically carried into this pinned assembly. A
 copied save can show the game's existing mod load report before Continue.
 
 `POKEPORT_VR_CAMERA_SETBACK_METERS` optionally moves ABOVE and third-person
-cameras back along their existing viewing direction (0–3 m, default 0.75).
+cameras back along their existing viewing direction (0–3 m, default 0).
 POV, head tracking and the 48 pixels/metre world scale remain unchanged.
-The wearer accepted 0.75 m in the Pewter City comparison. Explicit zero restores
-the original camera distance. HUD readability remains unverified.
+The wearer accepted an explicitly requested 0.75 m distance in the Pewter City
+comparison. Explicit zero preserves the original camera distance. HUD readability remains unverified.
 
 ## Verification
 

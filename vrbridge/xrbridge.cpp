@@ -55,7 +55,6 @@ extern "C" {
 #include <unistd.h>
 #include "common/runtime.h"
 #include "modules/graphics/Canvas.h"
-#include "modules/graphics/Graphics.h"
 #include "Telemetry.h"
 #endif
 
@@ -605,7 +604,8 @@ public:
     bool submitCanvases(love::graphics::Canvas* left, uint32_t leftWidth,
                         uint32_t leftHeight, bool leftReadable,
                         love::graphics::Canvas* right, uint32_t rightWidth,
-                        uint32_t rightHeight, bool rightReadable) {
+                        uint32_t rightHeight, bool rightReadable,
+                        bool timestampCanvasCopies) {
         if (!m_initialized) return failIfEmpty("xrbridge is not initialized");
         if (!m_frameActive) return fail("submitCanvases called without beginFrame");
         if (!sameCurrentContext()) {
@@ -625,9 +625,11 @@ public:
         }
 
         if (!copyCanvasToSwapchain(m_swapchains[0], left, leftWidth, leftHeight,
-                                   leftReadable, "eye1") ||
+                                   leftReadable,
+                                   timestampCanvasCopies ? "eye1" : nullptr) ||
             !copyCanvasToSwapchain(m_swapchains[1], right, rightWidth, rightHeight,
-                                   rightReadable, "eye2")) {
+                                   rightReadable,
+                                   timestampCanvasCopies ? "eye2" : nullptr)) {
             endEmptyFrame();
             return false;
         }
@@ -949,24 +951,21 @@ public:
                            const std::string& scene) {
         if (!m_telemetryEnabled || !sameCurrentContext()) return false;
         if (!m_timestampRing.probe(m_timestampBackend)) return false;
-        auto* graphics = love::Module::getInstance<love::graphics::Graphics>(
-            love::Module::M_GRAPHICS);
-        if (!graphics) return false;
-        // LOVE batches draws in CPU memory. Emit the prior batch before the
-        // timestamp so the span starts at the actual command-stream boundary.
-        graphics->flushStreamDraws();
         return m_timestampRing.begin(m_timestampBackend, name, frame,
                                       scene.c_str());
     }
 
     void endGpuTimestamp() {
         if (!m_telemetryEnabled || !sameCurrentContext()) return;
-        auto* graphics = love::Module::getInstance<love::graphics::Graphics>(
-            love::Module::M_GRAPHICS);
-        if (!graphics) return;
-        // Emit LOVE's batched draws before placing the closing timestamp.
-        graphics->flushStreamDraws();
         m_timestampRing.end(m_timestampBackend);
+    }
+
+    void cancelGpuTimestamp() {
+        if (m_telemetryEnabled) m_timestampRing.cancelActive();
+    }
+
+    void noteGpuTimestampError() {
+        if (m_telemetryEnabled) m_timestampRing.noteError();
     }
 
     void setTimestampContext(uint64_t frame, const std::string& scene) {
@@ -1071,6 +1070,8 @@ public:
                         bool sourceReadable, love::graphics::Canvas* target,
                         uint32_t targetWidth, uint32_t targetHeight,
                         size_t dumpEyeIndex) {
+        const char* telemetry = std::getenv("POKEPORT_VR_TELEMETRY");
+        m_telemetryEnabled = telemetry && std::strcmp(telemetry, "1") == 0;
         if (!m_glxContext && !captureCurrentContext()) return false;
         if (!sameCurrentContext()) return fail("testCanvasCopy requires the captured GLX context");
         const GLuint targetTexture = static_cast<GLuint>(target->getRenderTargetHandle());
@@ -2905,6 +2906,9 @@ static void setNumberField(lua_State* L, int tableIndex, const char* name, lua_N
 
 static void setStringField(lua_State* L, int tableIndex, const char* name,
                            const std::string& value) {
+    if (tableIndex < 0 && tableIndex > LUA_REGISTRYINDEX) {
+        tableIndex = lua_gettop(L) + tableIndex + 1;
+    }
     lua_pushlstring(L, value.data(), value.size());
     lua_setfield(L, tableIndex, name);
 }
@@ -3034,6 +3038,8 @@ static int l_submit(lua_State* L) {
 }
 
 #if defined(__linux__)
+static bool flushLoveBatch(lua_State* L);
+
 static int l_submitCanvases(lua_State* L) {
     try {
         love::graphics::Canvas* left = nullptr;
@@ -3050,8 +3056,12 @@ static int l_submitCanvases(lua_State* L) {
                                     &rightReadable)) {
             return pushFailure(L, g_bridge.lastError());
         }
+        const bool timestampCopies = !g_bridge.telemetryEnabled()
+            || flushLoveBatch(L);
+        if (!timestampCopies) g_bridge.noteGpuTimestampError();
         if (!g_bridge.submitCanvases(left, leftWidth, leftHeight, leftReadable,
-                                     right, rightWidth, rightHeight, rightReadable)) {
+                                     right, rightWidth, rightHeight, rightReadable,
+                                     timestampCopies)) {
             return pushFailure(L, g_bridge.lastError());
         }
         lua_pushboolean(L, 1);
@@ -3278,6 +3288,41 @@ static int l_status(lua_State* L) {
 }
 
 #if defined(__linux__)
+static bool flushLoveBatch(lua_State* L) {
+    static bool warningReported = false;
+    const int originalTop = lua_gettop(L);
+    const char* failure = nullptr;
+    std::string detail;
+
+    lua_getglobal(L, "love");
+    if (!lua_istable(L, -1)) {
+        failure = "love table is unavailable";
+    } else {
+        lua_getfield(L, -1, "graphics");
+        if (!lua_istable(L, -1)) {
+            failure = "love.graphics is unavailable";
+        } else {
+            lua_getfield(L, -1, "flushBatch");
+            if (!lua_isfunction(L, -1)) {
+                failure = "love.graphics.flushBatch is unavailable";
+            } else if (lua_pcall(L, 0, 0, 0) != 0) {
+                const char* message = lua_tostring(L, -1);
+                detail = message ? message : "non-string Lua error";
+                failure = "love.graphics.flushBatch failed";
+            }
+        }
+    }
+
+    lua_settop(L, originalTop);
+    if (!failure) return true;
+    if (!warningReported) {
+        std::fprintf(stderr, "[xrbridge] GPU telemetry scope skipped: %s%s%s\n",
+            failure, detail.empty() ? "" : ": ", detail.c_str());
+        warningReported = true;
+    }
+    return false;
+}
+
 static int l_telemetryClock(lua_State* L) {
     if (!g_bridge.telemetryEnabled()) {
         lua_pushnil(L);
@@ -3318,13 +3363,18 @@ static int l_gpuScopeBegin(lua_State* L) {
         frame = static_cast<uint64_t>(lua_tonumber(L, 2));
     const char* scene = lua_type(L, 3) == LUA_TSTRING
         ? lua_tostring(L, 3) : "unknown";
+    if (!flushLoveBatch(L)) {
+        g_bridge.noteGpuTimestampError();
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     lua_pushboolean(L, g_bridge.beginGpuTimestamp(name, frame, scene));
     return 1;
 }
 
 static int l_gpuScopeEnd(lua_State* L) {
-    (void)L;
-    g_bridge.endGpuTimestamp();
+    if (!flushLoveBatch(L)) g_bridge.cancelGpuTimestamp();
+    else g_bridge.endGpuTimestamp();
     lua_pushboolean(L, 1);
     return 1;
 }
