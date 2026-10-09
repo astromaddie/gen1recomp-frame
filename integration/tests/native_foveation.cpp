@@ -126,6 +126,25 @@ struct FoveationTest {
             b.configureFoveationExtensions(extensions);
             assert(extensions.empty() && b.foveationRequested() == "off");
         }
+        {
+            Bridge b;
+            int calls = 0;
+            assert(b.measureXrCall("disabled", [&] { ++calls; return XR_TIMEOUT_EXPIRED; }) == XR_TIMEOUT_EXPIRED);
+            assert(calls == 1 && b.m_completedCpuStages.empty());
+            b.m_telemetryEnabled = true;
+            b.setTelemetryContext(42,"PEWTER_CITY/above");
+            assert(b.measureXrCall("swapchain_wait_eye1", [&] { ++calls; return XR_SUCCESS; }) == XR_SUCCESS);
+            assert(calls == 2 && b.m_completedCpuStages.size() == 1);
+            auto stage = b.m_completedCpuStages.front();
+            assert(stage.frame == 42 && stage.scene == "PEWTER_CITY/above" && stage.name == "swapchain_wait_eye1");
+            for (int i=0; i<2050; ++i) b.measureXrCall("bounded", [] { return XR_SUCCESS; });
+            assert(b.m_completedCpuStages.size() == 2048 && b.m_cpuStagesDropped == 3);
+            auto sample = b.sampleTelemetry();
+            assert(sample.cpuStages.size() == 2048 && sample.cpuStagesDropped == 3 && b.m_completedCpuStages.empty() && b.m_cpuStagesDropped == 0);
+            b.resetTelemetryWindow();
+            assert(b.m_completedCpuStages.empty() && b.m_cpuStagesDropped == 0);
+            puts("NATIVE_CPU_STAGE_PASS: exact callback/result, scene/frame clocks, bounded collection, sample transfer, reset");
+        }
         puts("FOVEATION_PROTOCOL_PASS: real bridge profile chains, native dimensions, eye/fixed/off/unsupported, partial second-eye failures, symmetric recreation, cleanup");
     }
 };

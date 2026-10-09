@@ -37,20 +37,22 @@ local function prepare(record)
     if first%1536==1 then coroutine.yield() end
   end
   record.indices,record.ranges,record.groups=indices,ranges,groups
-  local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},count,"triangles","dynamic")
-  record.selected=selected
-  selected:setAttributeEnabled("CullingUnused",false)
-  for _,attribute in ipairs(mesh:getVertexFormat()) do selected:attachAttribute(attribute[1],mesh) end
+  if not record.visibilityOnly then
+    local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},count,"triangles","dynamic")
+    record.selected=selected
+    selected:setAttributeEnabled("CullingUnused",false)
+    for _,attribute in ipairs(mesh:getVertexFormat()) do selected:attachAttribute(attribute[1],mesh) end
+  end
   record.ready=true
 end
 local function release(record)
   if record.selected then record.selected:release() end
 end
-local function register(mesh)
+local function register(mesh,visibilityOnly)
   if not mesh then return end
   local record=cache[mesh]
   if not record then
-    record={source=mesh};record.worker=coroutine.create(function()prepare(record)end);cache[mesh]=record
+    record={source=mesh,visibilityOnly=visibilityOnly};record.worker=coroutine.create(function()prepare(record)end);cache[mesh]=record
   end
   record.seen=tick
 end
@@ -103,10 +105,23 @@ local function visible(g,ox,oy,oz,pull)
   end
   return false
 end
+-- Reflection setup copies the entire eye and paints actors even if its water
+-- will be clipped completely. Keep the original water meshes whenever any
+-- part can reach either eye; fail open until immutable bounds are ready.
+local function waterVisible(mesh,model)
+  local record=cache[mesh]
+  if not record or not record.ready or not frusta or not graphics.camera
+    or graphics.camera.__frameCullingTick~=tick then return true end
+  if model and (model[1]~=1 or model[6]~=1 or model[11]~=1 or model[2]~=0
+    or model[3]~=0 or model[5]~=0 or model[7]~=0 or model[9]~=0 or model[10]~=0) then return true end
+  local ox,oy,oz=model and model[4] or 0,model and model[8] or 0,model and model[12] or 0
+  for _,g in ipairs(record.groups) do if visible(g,ox,oy,oz,0) then return true end end
+  return false
+end
 local function selection(mesh,model,pull)
   pull=type(pull)=="number" and math.abs(pull) or 0
   local record=cache[mesh]
-  if not record or not frusta or not graphics.camera
+  if not record or record.visibilityOnly or not frusta or not graphics.camera
      or graphics.camera.__frameCullingTick~=tick then return mesh end
   metrics.active=true
   metrics.sourceIndices=metrics.sourceIndices+(record.total or 0)
@@ -157,7 +172,7 @@ function Culling.finish()
 end
 function Culling.begin(lib)
   Culling.finish();tick=tick+1;frusta=nil
-  metrics={sourceIndices=0,selectedIndices=0,pendingDraws=0,indexUpdates=0,readyMeshes=0,preparingMeshes=0}
+  metrics={sourceIndices=0,selectedIndices=0,pendingDraws=0,indexUpdates=0,readyMeshes=0,preparingMeshes=0,waterPassesSkipped=0}
   local disabled=os.getenv("POKEPORT_VR_DRAW_DISTANCE")=="off"
   metrics.mode=disabled and "off" or "frustum"
   metrics.active=false
@@ -194,7 +209,16 @@ function Culling.begin(lib)
   end end)
   for _,name in ipairs({"pair","grass","flowers"}) do
     hook(Mesher,name,function(original)return function(...)
-      local a,b=original(...);register(a);return a,b
+      local a,b=original(...);register(a);if name=="pair" then register(b,true) end;return a,b
+    end end)
+  end
+  local scene=lib.require("VoxelScene")
+  if scene.drawWater then
+    hook(scene,"drawWater",function(original)return function(draws,...)
+      for _,d in ipairs(draws) do
+        if waterVisible(d[1],d[3]) then return original(draws,...) end
+      end
+      metrics.waterPassesSkipped=metrics.waterPassesSkipped+1
     end end)
   end
   for _,name in ipairs({"Voxel3D"}) do

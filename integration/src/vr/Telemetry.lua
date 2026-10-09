@@ -53,7 +53,7 @@ local function bucketFor(scene)
       scene = key, frames = 0, submitted = 0, firstFrame = nil, lastFrame = nil,
       stages = {}, xrWaitWall = {}, xrWaitCpu = {},
       culler = { frames = 0, indexUpdates = 0, sourceIndices = 0,
-        selectedIndices = 0, pendingDraws = 0 },
+        selectedIndices = 0, pendingDraws = 0, waterPassesSkipped = 0 },
     }
     state.buckets[key] = bucket
   end
@@ -110,6 +110,7 @@ local function collectCuller(bucket)
   culler.sourceIndices = culler.sourceIndices + safeNumber(status.sourceIndices)
   culler.selectedIndices = culler.selectedIndices + safeNumber(status.selectedIndices)
   culler.pendingDraws = culler.pendingDraws + safeNumber(status.pendingDraws)
+  culler.waterPassesSkipped = culler.waterPassesSkipped + safeNumber(status.waterPassesSkipped)
   culler.mode = status.mode or culler.mode
   culler.active = status.active == true
 end
@@ -272,10 +273,10 @@ local function printSceneBuckets(loadSample, windowScene)
   for scene, bucket in pairs(state.buckets) do
     if bucket.frames > 0 then
       local culler = bucket.culler
-      local cullerText = string.format("culler_mode=%s culler_active=%s culler_samples=%d index_updates=%d source_indices=%d selected_indices=%d pending_draws=%d",
+      local cullerText = string.format("culler_mode=%s culler_active=%s culler_samples=%d index_updates=%d source_indices=%d selected_indices=%d pending_draws=%d water_passes_skipped=%d",
         tostring(culler.mode or "unavailable"), tostring(culler.active == true),
         culler.frames, culler.indexUpdates, culler.sourceIndices,
-        culler.selectedIndices, culler.pendingDraws)
+        culler.selectedIndices, culler.pendingDraws, culler.waterPassesSkipped)
       local waitWall = string.format("n=%d p50_ms=%s p95_ms=%s",
         #bucket.xrWaitWall, milliseconds(percentile(bucket.xrWaitWall, 0.50)),
         milliseconds(percentile(bucket.xrWaitWall, 0.95)))
@@ -377,6 +378,14 @@ function Telemetry.sample()
   local ok, sample = pcall(bridge.telemetrySample)
   if not ok or type(sample) ~= "table" then return end
 
+  for _,stage in ipairs(sample.cpuStages or {}) do
+    if stage.frame >= state.firstFrame then
+      appendStage(stage.scene,stage.name,stage.wallNs,stage.processCpuNs,stage.mainCpuNs)
+    end
+  end
+  if (sample.cpuStagesDropped or 0) > 0 then
+    print("[vr-telemetry]", "cpu_stages_dropped=" .. tostring(sample.cpuStagesDropped))
+  end
   local stableScene = state.sceneChangesSinceSample == 0
       and not state.nonRenderableSinceSample and state.measurementActive
   local windowScene = stableScene and state.scene or "transition-or-unrenderable"

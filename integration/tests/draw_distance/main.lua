@@ -30,10 +30,15 @@ function love.load()
   local cam={x=0,y=0};local model;local monoCamera
   modules.VoxelScene={render=function(state,w,h,vw,vh)
     local a,b=modules.ChunkMesher.pair()
-    modules.Voxel3D.draw(a,nil,model);modules.Water.draw(b,nil,model)
+    modules.Voxel3D.draw(a,nil,model);modules.VoxelScene.drawWater({{b,nil,model}})
     modules.Voxel3D.draw(modules.SpriteBillboards.mesh(),nil,Mat.translate(64,0,32))
     modules.Voxel3D.draw(modules.SpriteBillboards.mesh(),nil,Mat.translate(500,0,500))
   end}
+  local reflections=0
+  modules.VoxelScene.drawWater=function(waterDraws)
+    reflections=reflections+1
+    for _,d in ipairs(waterDraws) do modules.Water.draw(d[1],d[2],d[3]) end
+  end
   local lib={require=function(name)return assert(modules[name],name)end}
   local function views()
     local result={}
@@ -84,6 +89,14 @@ function love.load()
   assert(draws[1][1]==draws[5][1],"translated neighbors agree between eyes")
   model=nil;cam.x=400;cam.y=400
   local shifted=frame();assert(shifted.indexUpdates>0,"scroll changes selection")
+  cam.x=2000;local noWater=frame()
+  assert(noWater.waterPassesSkipped==2,"off-frustum water must skip both reflection setups")
+  for _,d in ipairs(draws) do assert(d[1]~=water,"off-frustum reflection must not draw water") end
+  monoCamera=true;local fallback=frame()
+  assert(fallback.waterPassesSkipped==0,"mono fallback must retain water")
+  monoCamera=false;cam.x=0;cam.y=0;local visibleAgain=frame()
+  assert(visibleAgain.waterPassesSkipped==0 and draws[2][1]==water,"visible water must retain its complete original mesh")
+  cam.x=400;cam.y=400;frame()
   -- Replacing the source is its invalidation key; old selected GPU resources
   -- are retired after their last two-frame grace period.
   local retired=draws[1][1]

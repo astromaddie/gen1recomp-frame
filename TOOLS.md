@@ -195,3 +195,25 @@ The continuous device driver `vr_telemetry_driver.lua` calls the updated
 DRAMALESS `saved_scene.lua`, prints its initial measurement marker, and yields
 forever afterward while CPU/GPU collection continues. Only the user ends the
 settings-tuning session; do not add a diagnostic auto-quit.
+
+## Shadow and frame-order regressions
+
+Run `love integration/tests/shadow_cache` under the same LÖVE/Xvfb environment
+with `POKEPORT_TEST_VOXEL` pointing to the newly assembled DRAMALESS directory.
+It runs the actual shadow shader, fitter and canvas lifecycle. The original
+unpatched source must fail the retained-target assertion at a larger size rung.
+`main_overlay_test.lua` also exercises the actual `love.run` order: current XR
+time/focus, inactive graphics, update/draw errors, skipped/direct draws and flat
+wall-clock fallback. `native_foveation.cpp` includes the bounded CPU-stage clock
+collection/transfer/reset check against the actual bridge translation unit.
+
+`integration/tests/performance_scene_driver.lua` uses the same private copied-save
+host setup and pose environment as `dramaless_scene_driver.lua` (`QA_LEVEL` also
+selects a camera rung). It compares unguarded water and the old compulsory shadow
+redraw behavior against the corrected path, within one update with clocks frozen.
+The baseline forces shadow invalidation only when the fitted target is above
+1024; the original target-allocation bug is tested independently. Both captures
+retain existing terrain frustum selection. It reports full-image error, actual
+shadow/reflection pass counts and source triangle counts, then verifies actor
+movement/restoration and outdoor lighting invalidate the real scene cache.
+Do not interpret software-GL host timings as Steam Frame performance.

@@ -13,7 +13,10 @@ The GPU boundary reverses Canvas rows: LÖVE Canvas logical top is GL row zero,
 whereas OpenXR GL images use a bottom-left origin. Diagnostic PPMs reverse
 raw glReadPixels rows to show the compositor image truthfully as top-left.
 
-The game simulates once before drawing both eyes. The native host adapter derives
+The loop begins/waits/locates the XR frame before the single game update, then
+draws both eyes. A prepared frame is consumed once by draw; skipped draws and
+update/draw errors abort it. Inactive graphics never reuses an old XR delta.
+Direct draw callers retain their own begin/submit fallback. The native host adapter derives
 each eye camera from the same frame's predicted pose/FOV. `xrWaitFrame` supplies
 pacing; successive predicted display timestamps supply simulation dt, with the
 runtime period used on first frame, resume, or invalid/nonmonotonic timestamps.
@@ -55,6 +58,31 @@ orientation, head tracking, IPD and 48 pixels/metre. POV does not move. The wear
 accepted an explicitly requested 0.75 m distance during the 1024-square test;
 explicit zero or the default preserves the original distance. Native recommended eye dimensions
 remain the default; no lower resolution has been adopted.
+
+## Shadow reuse and invisible reflection work
+
+The pinned shadow availability probe always requested its smallest (1024) canvas.
+If the real light fitter selected 1536 or 2048, each subsequent probe released
+that fitted texture and cleared its ready flag, then `begin` allocated the fitted
+size again. The integration patch retains an allocated target during availability
+checks. The original fitter, size ladder, quality, caster geometry and scene
+signature still decide actual rebuilds. The signature additionally includes the
+actual first-person sprite-facing choice, since two tracked eyes can cross a
+facing boundary. It never shares a shadow of the wrong sprite frame.
+
+The existing conservative frustum bounds now register water for visibility only.
+When all water is outside both tracked eye frusta, its reflection setup/copy and
+redundant actor pass are skipped. If any water is potentially visible, or bounds
+are still preparing, the complete original water/reflection path runs. No water
+index proxy is created and no water geometry is trimmed. Shadow casters and the
+visible room/floor remain complete. Telemetry reports `water_passes_skipped`.
+
+Host verification uses real shaders, fitters, meshes and full 1728-square eye
+Canvases. `shadow_cache` covers target identity/allocation reuse, signature misses,
+fit resizing, discard and OFF; `performance_scene_driver.lua` compares complete
+same-update stereo images against compulsory old shadow redraws plus unguarded
+reflection setup, then exercises real actor and lighting invalidation. These
+host pass counts are not a Frame FPS measurement or worn jitter acceptance.
 
 ## DRAMALESS source replacement (2026-10-09)
 
@@ -160,9 +188,12 @@ not lower eye resolution. The driver is optional and must be copied to the
 diagnostic install. It keeps yielding without changing controls so the game
 stays open until the player closes it.
 
-Per-stage wall and CPU deltas cover the game update/draw, XR begin, and XR
-submission. `draw` contains XR begin/wait; these stage values overlap and must
-not be added together. `xrWaitFrame` wall and calling-thread CPU are reported
+Per-stage wall and CPU deltas cover the game update/draw, XR begin, XR
+submission, each eye's swapchain acquisition/wait, XR end-frame, and desktop
+window present. Normal-loop draw no longer contains XR begin/wait. Native
+submission substages overlap the encompassing XR submission stage and must not
+be added to it. Native CPU samples are bounded to 2048 entries between polls;
+dropped entries are reported and reset on each sample. `xrWaitFrame` wall and calling-thread CPU are reported
 separately. Process and main-thread CPU percentages use elapsed monotonic wall
 time as the denominator: 100% is one full core, so process usage can exceed
 100% when Zink or other worker threads are active. One-second summaries carry
@@ -186,8 +217,9 @@ interval, not whole-system GPU utilization. New, removed, or regressing clients
 are marked warming/partial; counter regressions retain a high-water baseline.
 `drm-cycles-gpu`, max frequency, and the sampled devfreq current frequency are
 reported only when available. Frequency is not a utilization measure. Missing
-busy counters remain unavailable. No CPU/GPU diagnosis or new performance
-acceptance has been made from these diagnostics yet.
+busy counters remain unavailable. These counters and source timestamps separate
+outdoor GPU cost from CPU execution; device performance acceptance remains a
+separate measured comparison and wearer gate.
 
 For a short off-headset diagnostic only, `POKEPORT_XR_FORCE_RENDER=1` together
 with `POKEPORT_VR_TELEMETRY=1` authorizes rendering while the runtime reports

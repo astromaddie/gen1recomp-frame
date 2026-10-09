@@ -52,6 +52,8 @@ bridge = {
       gpuMaxFreqHz = 903000000,
       gpuClients = { { identity = "msm:no-pdev:417895", driver = "msm",
         busyPct = 50, cycles = 4, maxFreqHz = 903000000 } },
+      cpuStages = {{name="swapchain_wait_eye1",scene="PEWTER_CITY/above",frame=10,
+        wallNs=4000000,processCpuNs=200000,mainCpuNs=100000}},
       gpuTimestampStatus = "available",
       gpuTimestampPending = 2,
       gpuTimestampDropped = 1,
@@ -193,4 +195,5 @@ assert(forcedGpu and forcedGpu:find("force_render_mode=true")
 
 Telemetry.stopWindow()
 os.getenv, print = oldGetenv, oldPrint
+assert(table.concat(lines,"\n"):find("swapchain_wait_eye1",1,true),"native CPU stages missing")
 print("telemetry integration tests passed")

@@ -65,3 +65,20 @@
 +    return trackedEye, cx + ((me and me.px + 8 or cx) - cx) * e,
 +      cy + ((me and me.py + 8 or cy) - cy) * e
 +  end
+--- a/lib/ShadowMap.lua
++++ b/lib/ShadowMap.lua
+@@ -320,3 +320,5 @@
+-  -- the smallest rung is enough to answer the question; fit() picks the
+-  -- one this frame actually wants
+-  return getShader() ~= nil and getCanvas(ShadowMap.SIZES[1]) ~= nil
++  -- Probe once at the smallest rung, then retain the fitted target. Resizing
++  -- here invalidates its contents and thrashes 1024 -> fitted size every eye.
++  -- begin()/fit() still own real view-size changes and signature invalidation.
++  local res = canvasRes > 0 and canvasRes or ShadowMap.SIZES[1]
++  return getShader() ~= nil and getCanvas(res) ~= nil
+--- a/lib/VoxelScene.lua
++++ b/lib/VoxelScene.lua
+@@ -904,0 +905,3 @@
++    -- Tracked eyes can straddle a sprite-facing boundary. Cache the actual
++    -- caster frame choice too, so sharing never substitutes the other cheek.
++    put(viewFacing(p))

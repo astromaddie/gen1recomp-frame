@@ -181,65 +181,106 @@
 @@ -456 +588 @@
 -  local dramatic = exports and exports.DRAMATIC_SHAPE
 +  local dramatic = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
-@@ -483,0 +616,6 @@
-+    if VRRuntime.isBridgeActive() and not vrVsyncDisabled
-+       and love.system and love.system.getOS() == "Linux"
-+       and love.window and love.window.setVSync then
-+      local ok = pcall(love.window.setVSync, 0)
-+      if ok then vrVsyncDisabled = true end
-+    end
-@@ -486,0 +625,5 @@
+@@ -475,0 +608,17 @@
++-- OpenXR owns the current update's clock and focus state. Keep a prepared
++-- frame for draw so the loop waits/locates once, before simulation and input.
++-- Direct draw callers (host render probes) still get a complete frame.
++local vrPrepared
++local function prepareVRFrame()
++  if vrPrepared then return end
++  local width,height = pixelDimensions()
++  local began = VRRuntime.beginFrame(width,height) == true
++  vrPrepared = {width=width,height=height,began=began}
++  if VRRuntime.isBridgeActive() and not vrVsyncDisabled
++     and love.system and love.system.getOS() == "Linux"
++     and love.window and love.window.setVSync then
++    local ok = pcall(love.window.setVSync, 0)
++    if ok then vrVsyncDisabled = true end
++  end
++end
++
+@@ -482,2 +631,3 @@
+-    vrWidth, vrHeight = pixelDimensions()
+-    vrFrame = VRRuntime.beginFrame(vrWidth, vrHeight) == true
++    prepareVRFrame()
++    vrWidth,vrHeight,vrFrame = vrPrepared.width,vrPrepared.height,vrPrepared.began
++    vrPrepared = nil
+@@ -486,0 +637,5 @@
 +  local presentation
 +  if vrFrame and VRRuntime.isBridgeActive() and VRRuntime.shouldRender() then
 +    presentation = require("src.vr.GamePresentation")
 +    presentation.beginDraw(Game)
 +  end
-@@ -497,0 +641 @@
+@@ -497,0 +653 @@
 +  if presentation then presentation.endDraw() end
-@@ -554,0 +699 @@
+@@ -554,0 +711 @@
 +  if not vrInputAllowed() then return end
-@@ -561,0 +707 @@
+@@ -561,0 +719 @@
 +  if not vrInputAllowed() then return end
-@@ -567,0 +714 @@
+@@ -567,0 +726 @@
 +  if not vrInputAllowed() then return end
-@@ -573,0 +721 @@
+@@ -573,0 +733 @@
 +  if not vrInputAllowed() then return end
-@@ -579,0 +728 @@
+@@ -579,0 +740 @@
 +  if not vrInputAllowed() then return end
-@@ -585,0 +735 @@
+@@ -585,0 +747 @@
 +  if not vrInputAllowed() then return end
-@@ -591,0 +742 @@
+@@ -591,0 +754 @@
 +  if not vrInputAllowed() then return end
-@@ -597,0 +749 @@
+@@ -597,0 +761 @@
 +  if not vrInputAllowed() then return end
-@@ -603,0 +756 @@
+@@ -603,0 +768 @@
 +  if not vrInputAllowed() then return end
-@@ -609,0 +763 @@
+@@ -609,0 +775 @@
 +  if not vrInputAllowed() then return end
-@@ -634,0 +789 @@
+@@ -634,0 +801 @@
 +  if not vrInputAllowed() then return end
-@@ -657,0 +813 @@
+@@ -657,0 +825 @@
 +  if not vrInputAllowed() then return end
-@@ -667,0 +824 @@
+@@ -667,0 +836 @@
 +  if not vrInputAllowed() then return end
-@@ -677,0 +835 @@
+@@ -677,0 +847 @@
 +  if not vrInputAllowed() then return end
-@@ -687,0 +846 @@
+@@ -687,0 +858 @@
 +  if not vrInputAllowed() then return end
-@@ -720,0 +880 @@
+@@ -720,0 +892 @@
 +  if not vrInputAllowed() then return end
-@@ -734,0 +895 @@
+@@ -734,0 +907 @@
 +  if not vrInputAllowed() then return end
-@@ -745,0 +907 @@
+@@ -745,0 +919 @@
 +  if not vrInputAllowed() then return end
-@@ -822 +984 @@
+@@ -822 +996,4 @@
 -    -- update dt
-+    -- The previous xrWaitFrame supplies the fixed VR simulation interval.
-@@ -823,0 +986 @@
-+    if VRRuntime.isFramePaced() then dt = VRRuntime.frameDelta(dt) end
-@@ -836 +999,5 @@
++    -- Wait and locate before update consumes this frame's time and focus.
++    if VRRuntime.isEnabled() and love.graphics and love.graphics.isActive() then
++      prepareVRFrame()
++    end
+@@ -824,2 +1001,5 @@
+-
+-    -- call update and draw
++    local xrPacedThisFrame = vrPrepared and VRRuntime.isFramePaced()
++    if xrPacedThisFrame then dt = VRRuntime.frameDelta(dt) end
++
++    -- Close a begun XR frame even if update, draw, or present raises.
++    local frameOK, frameError = xpcall(function()
+@@ -831,0 +1012,2 @@
++      local telemetry = package.loaded["src.vr.Telemetry"]
++      local presentStage = telemetry and telemetry.beginStage("window_present")
+@@ -833,2 +1015,9 @@
+-    end
+-
++      if telemetry then telemetry.endStage(presentStage) end
++    end
++
++    end, debug.traceback)
++    -- A skipped/custom draw callback may decline to consume the frame.
++    if vrPrepared or (not frameOK and xrPacedThisFrame) then
++      VRRuntime.abortFrame(); vrPrepared = nil
++    end
++    if not frameOK then error(frameError,0) end
+@@ -836 +1025,5 @@
 -      if paced then
-+      if VRRuntime.isFramePaced() then
++      if xrPacedThisFrame then
 +        -- xrWaitFrame already paced this frame; do not add window VSync or
 +        -- FrameCap sleep on top of the compositor clock.
 +        nextFrame = love.timer.getTime()

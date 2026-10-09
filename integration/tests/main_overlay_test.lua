@@ -59,7 +59,8 @@ local modules = {
       gameReady = onComplete
       startup[#startup + 1] = "importer"
       importer = {
-        update = function(self) calls[#calls + 1] = { kind = "update" } end,
+        update = function(self, dt) calls[#calls + 1] = { kind = "update", dt = dt } end,
+        draw = function() calls[#calls + 1] = { kind = "draw" } end,
         keypressed = function(self, key)
           calls[#calls + 1] = { kind = "key", value = key }
         end,
@@ -147,6 +148,68 @@ function game:load() self.save = { options = { pipelines = { voxel = 0 } } } end
 gameReady("red")
 assert(game.save.options.pipelines.voxel == 0 and game.writes == 1 and voxelSets == 1,
   "VR startup must preserve an explicit player choice to disable voxel mode")
+
+-- Exercise the production love.run loop, including its production draw
+-- fallback, with a bridge that polls but declines submission. Current-frame
+-- focus and delta must reach update; draw must not poll/begin it again.
+love.load({})
+love.load = nil
+love.event = nil
+local enabled, begins, currentDelta, ticks, aborts = true, 0, 0, 0, 0
+runtime.isEnabled=function()return enabled end
+runtime.isBridgeActive=function()return enabled end
+runtime.isFramePaced=function()return enabled end
+runtime.beginFrame=function()
+  begins=begins+1
+  currentDelta=begins/100
+  focused=begins~=2
+  return false
+end
+runtime.frameDelta=function()return currentDelta end
+runtime.abortFrame=function()aborts=aborts+1 end
+modules["src.core.FrameCap"]={current=60}
+love.graphics.isActive=function()return true end
+love.graphics.origin=function()end
+love.graphics.clear=function()end
+love.graphics.getBackgroundColor=function()return 0,0,0,1 end
+love.graphics.present=function()calls[#calls+1]={kind="present"}end
+love.timer={step=function()ticks=ticks+1;return .02 end,getTime=function()return ticks end,sleep=function()end}
+local loop=love.run()
+local before=count("update")
+loop()
+assert(begins==1 and count("update")==before+1,"one current XR begin before update/draw")
+local function lastUpdateDelta()
+  for i=#calls,1,-1 do if calls[i].kind=="update" then return calls[i].dt end end
+end
+assert(lastUpdateDelta()==.01,"update used a previous XR frame delta")
+loop()
+assert(begins==2 and count("update")==before+1,"same-frame focus loss must freeze simulation")
+loop()
+assert(begins==3 and count("update")==before+2 and lastUpdateDelta()==.03,"resume must use current XR delta")
+love.draw();assert(begins==4,"direct draw must still prepare its frame")
+enabled=false
+loop();assert(begins==4 and lastUpdateDelta()==.02,"flat loop must preserve wall clock and skip XR")
+enabled=true
+local originalUpdate=love.update
+local beforeAbort=aborts
+love.update=function()error("injected update failure")end
+assert(not pcall(loop) and aborts==beforeAbort+1,"update error must abort the prepared XR frame")
+love.update=originalUpdate
+local beforeBegin=begins
+loop();assert(begins==beforeBegin+1,"error recovery must acquire a fresh frame")
+beforeBegin=begins
+love.graphics.isActive=function()return false end
+loop();assert(begins==beforeBegin and lastUpdateDelta()==.02,"inactive graphics must not use stale XR delta")
+love.graphics.isActive=function()return true end
+local normalDraw=love.draw
+love.draw=function()error("injected draw failure")end
+beforeAbort=aborts
+assert(not pcall(loop) and aborts==beforeAbort+1,"draw error must abort the prepared XR frame")
+love.draw=function()end
+beforeAbort=aborts
+loop();assert(aborts==beforeAbort+1,"skipped draw must close the prepared frame")
+love.draw=normalDraw
+print("main frame ordering tests passed")
 
 _G.require = originalRequire
 print("main overlay tests passed")

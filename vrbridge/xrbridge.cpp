@@ -153,7 +153,14 @@ struct DrmGpuClientSample {
     bool cyclesAvailable = false;
 };
 
+struct CpuStageSample {
+    std::string name, scene;
+    uint64_t frame = 0, wallNs = 0, processCpuNs = 0, mainCpuNs = 0;
+};
+
 struct TelemetrySnapshot {
+    std::vector<CpuStageSample> cpuStages;
+    uint64_t cpuStagesDropped = 0;
     uint64_t wallNs = 0;
     uint64_t processCpuNs = 0;
     uint64_t mainCpuNs = 0;
@@ -303,6 +310,8 @@ public:
         m_lastTelemetryMainCpuNs = 0;
         m_gpuCounterTracker.clear();
         m_completedGpuTimestamps.clear();
+        m_completedCpuStages.clear();
+        m_cpuStagesDropped = 0;
         m_timestampResultsDropped = 0;
         m_timestampRing.release(m_timestampBackend);
 #endif
@@ -731,7 +740,8 @@ public:
         endInfo.environmentBlendMode = m_environmentBlendMode;
         endInfo.layerCount = 1;
         endInfo.layers = layers;
-        const XrResult result = m_endFrame(m_session, &endInfo);
+        const XrResult result = measureXrCall("xr_end_frame", [&] {
+            return m_endFrame(m_session, &endInfo); });
         m_frameActive = false;
         if (XR_FAILED(result)) return failResult("xrEndFrame (Canvas)", result);
         ++m_submitCount;
@@ -1069,6 +1079,23 @@ public:
     uint64_t lastWaitWallNs() const { return m_lastWaitWallNs; }
     uint64_t lastWaitCpuNs() const { return m_lastWaitCpuNs; }
 
+    template<class Function>
+    XrResult measureXrCall(const char* name, Function call) {
+        if (!m_telemetryEnabled) return call();
+        CpuStageSample sample;
+        sample.name = name; sample.scene = m_telemetryScene; sample.frame = m_telemetryFrame;
+        const uint64_t wall = clockNanoseconds(CLOCK_MONOTONIC);
+        const uint64_t process = clockNanoseconds(CLOCK_PROCESS_CPUTIME_ID);
+        const uint64_t thread = clockNanoseconds(CLOCK_THREAD_CPUTIME_ID);
+        const XrResult result = call();
+        sample.mainCpuNs = clockNanoseconds(CLOCK_THREAD_CPUTIME_ID) - thread;
+        sample.processCpuNs = clockNanoseconds(CLOCK_PROCESS_CPUTIME_ID) - process;
+        sample.wallNs = clockNanoseconds(CLOCK_MONOTONIC) - wall;
+        if (m_completedCpuStages.size() < 2048) m_completedCpuStages.push_back(std::move(sample));
+        else ++m_cpuStagesDropped;
+        return result;
+    }
+
     void setTelemetryContext(uint64_t frame, const std::string& scene) {
         if (!m_telemetryEnabled) return;
         m_telemetryFrame = frame;
@@ -1118,6 +1145,8 @@ public:
         if (!m_telemetryEnabled) return;
         m_timestampRing.resetCounters();
         m_completedGpuTimestamps.clear();
+        m_completedCpuStages.clear();
+        m_cpuStagesDropped = 0;
         m_timestampResultsDropped = 0;
     }
 
@@ -1167,6 +1196,9 @@ public:
         }
 
         sample.gpuTimestamps.swap(m_completedGpuTimestamps);
+        sample.cpuStages.swap(m_completedCpuStages);
+        sample.cpuStagesDropped = m_cpuStagesDropped;
+        m_cpuStagesDropped = 0;
         sample.gpuTimestampResultsDropped = m_timestampResultsDropped;
         m_timestampResultsDropped = 0;
         return sample;
@@ -2495,12 +2527,13 @@ private:
         if (!ensureCopyFramebuffers()) return false;
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-        XrResult result = m_acquireSwapchainImage(swapchain.handle, &acquireInfo,
-                                                   &imageIndex);
+        XrResult result = measureXrCall(&swapchain == &m_swapchains[0] ? "swapchain_acquire_eye1" : "swapchain_acquire_eye2", [&] {
+            return m_acquireSwapchainImage(swapchain.handle, &acquireInfo, &imageIndex); });
         if (XR_FAILED(result)) return failResult("xrAcquireSwapchainImage", result);
         XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         waitInfo.timeout = XR_INFINITE_DURATION;
-        result = m_waitSwapchainImage(swapchain.handle, &waitInfo);
+        result = measureXrCall(&swapchain == &m_swapchains[0] ? "swapchain_wait_eye1" : "swapchain_wait_eye2", [&] {
+            return m_waitSwapchainImage(swapchain.handle, &waitInfo); });
         if (XR_FAILED(result)) {
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             (void)m_releaseSwapchainImage(swapchain.handle, &releaseInfo);
@@ -2967,6 +3000,8 @@ private:
     vrtelemetry::TimestampRing<kGpuTimestampRingCapacity> m_timestampRing;
     vrtelemetry::DrmCounterTracker m_gpuCounterTracker;
     std::vector<vrtelemetry::TimestampResult> m_completedGpuTimestamps;
+    std::vector<CpuStageSample> m_completedCpuStages;
+    uint64_t m_cpuStagesDropped = 0;
     uint64_t m_timestampResultsDropped = 0;
 #endif
 #endif
@@ -3721,6 +3756,21 @@ static int l_telemetrySample(lua_State* L) {
         lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
     lua_setfield(L, table, "gpuClients");
+
+    setNumberField(L, table, "cpuStagesDropped", static_cast<lua_Number>(sample.cpuStagesDropped));
+    lua_newtable(L);
+    for (size_t i = 0; i < sample.cpuStages.size(); ++i) {
+        const CpuStageSample& stage = sample.cpuStages[i];
+        lua_newtable(L);
+        setStringField(L, -1, "name", stage.name);
+        setStringField(L, -1, "scene", stage.scene);
+        setNumberField(L, -1, "frame", static_cast<lua_Number>(stage.frame));
+        setNumberField(L, -1, "wallNs", static_cast<lua_Number>(stage.wallNs));
+        setNumberField(L, -1, "processCpuNs", static_cast<lua_Number>(stage.processCpuNs));
+        setNumberField(L, -1, "mainCpuNs", static_cast<lua_Number>(stage.mainCpuNs));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, table, "cpuStages");
 
     setStringField(L, table, "gpuTimestampStatus", g_bridge.gpuTimestampStatus());
     setNumberField(L, table, "gpuTimestampPending",
