@@ -168,3 +168,51 @@ source shading remains explicitly `unverified-runtime-injection`.
 Protocol details follow the Khronos [swapchain foveation create flags](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSwapchainCreateFoveationFlagBitsFB.html),
 [level profile chain](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFoveationLevelProfileCreateInfoFB.html),
 and [profile lifetime](https://registry.khronos.org/OpenXR/specs/1.1/man/html/xrDestroyFoveationProfileFB.html).
+
+### Conservative stereo-frustum mesh selection
+
+`src/vr/DrawDistance.lua` scopes hooks to the native XR draw and captures both
+cameras returned by `Runtime.views` before the first eye renders. It uses the
+same pinned Mat4 projection/look-at convention, full eye roll and asymmetric
+FOV. A map chunk is skipped only if its conservative 3D bounds lie outside
+**both** eye frusta. There is no scrolling-viewport cut, distance limit, or
+floor removal. The developer baseline bypass is `POKEPORT_VR_DRAW_DISTANCE=off`.
+
+Immutable map meshes returned by ChunkMesher are analysed once per source
+identity into 32-world-pixel XZ groups, each with its full vertical extent.
+Preparation has a shared 2 ms frame budget (checked every 256 quads); both eyes
+continue using the full mesh until preparation completes on a later draw.
+Selected meshes attach the original vertex attributes and only supply a filtered
+index list in original order. The list is uploaded only when the visible group
+set changes, and shared by both eyes. Neighbor translation is applied before the
+frustum test. Unsupported model transforms conservatively use the original.
+Unused entries and derived GPU meshes are retired after two absent draws;
+replacement source identities invalidate selection naturally. The cache uses
+explicit retirement because attached vertex buffers retain the original mesh;
+weak Lua keys alone cannot break that reference chain. Diagnostic off mode also
+retires old entries, and Runtime shutdown releases all proxies without releasing
+source meshes owned by ChunkMesher.
+
+`DrawDistance.status()` exposes the last draw's mode, active XR use, cache
+readiness, pending draws, index uploads and full/selected eligible map index
+counts. Divide the index counts by three for triangles; they include both eyes
+but exclude actors, untouched water and the shadow pass. It does not read GPU
+resources or log each frame.
+
+The test expands each group by 8 world pixels and the side frustum planes by 4%.
+It bounds the exact quadratic WorldCurve vertical displacement, including
+interior extrema, then expands for the shader's camera-facing depth pull. This
+also conservatively covers geometry pulled through a very close eye. Near/far
+plane rejection is intentionally omitted. Actors and full shadow
+casters remain unchanged. The pinned water reflection is screen-space: it reads
+the already-rendered color/depth image and falls back to sky outside that image;
+it does not render a separate reflected camera. Water stays on its original
+complete mesh/index stream, including when its shader falls back to Voxel3D,
+preserving the existing reflective surface path. The pinned terrain/water vertex
+shaders have no wind displacement; water relief is evaluated in the fragment
+shader inside the original surface footprint.
+
+Full-resolution same-update image comparisons are the acceptance evidence for
+this selection. Primitive-count reduction is host geometry evidence only; it is
+not a Steam Frame FPS measurement. Earlier viewport-window screenshots are a
+rejected experiment and do not describe the production behavior.

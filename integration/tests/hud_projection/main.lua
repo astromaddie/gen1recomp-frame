@@ -71,8 +71,13 @@ function love.load()
   local state={player=player,entities={player},map={id="test",renderer={drawMapOnly=function()
     love.graphics.clear(0,1,0,1)
   end}}}
+  package.loaded["src.vr.DrawDistance"]=load(kit.."/integration/src/vr/DrawDistance.lua")
+  local cullingModules={Mat4=load(mod.."/lib/Mat4.lua"),
+    ChunkMesher={pair=function()end,grass=function()end,flowers=function()end},
+    Voxel3D={draw=function()end},Water={draw=function()end}}
   local shot
   local game={stack={top=function()return state end},mods={exports={DRAMATIC_SHAPE={lib={require=function(name)
+    if cullingModules[name] then return cullingModules[name] end
     if name=="Minimap" then return Minimap end
     assert(name=="OverworldBattle");return {shot=function()return shot end}
   end}}}}}

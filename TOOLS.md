@@ -153,3 +153,24 @@ For Frame comparison, preserve native eye dimensions and scene, use
 Valve injection layer. Verify source eye render-pass attachment before attributing
 any timing difference to foveated rendering. Runtime API acceptance alone is not
 sufficient. `fixed` is a diagnostic fallback, not an eye-tracking claim.
+
+For conservative frustum selection, run `love integration/tests/draw_distance`
+with `POKEPORT_TEST_KIT` and `POKEPORT_TEST_VOXEL` under the pinned LÖVE/Xvfb
+runtime. Its real indexed mesh tests cover ordered vertex selection, whole
+visible boundary geometry, original shadow mesh preservation, stereo readiness,
+neighbor translation, and cache invalidation.
+
+`integration/tests/draw_distance/scene_driver.lua` runs inside a private assembled
+game with the copied Yellow slot1 and player-owned import cache. Set
+`GEN1_FRAME_DRIVER_UTIL` to `integration/tests/driver_util.lua`, `SHOT_DIR` to a
+fresh output directory, and start with `POKEPORT_VR=0`, `POKEPORT_XRBRIDGE=fake`.
+The driver switches to a fake native frame boundary with real 1728² eye Canvases,
+then compares the actual pinned VoxelScene/ChunkMesher/render passes with culling
+off/on in the same game update with rendering time, delta and the DayNight SYNC
+clock frozen. Optional `QA_MAP`, `QA_X`, `QA_Y`, `QA_YAW`, `QA_PITCH`, `QA_ROLL`,
+`QA_SHIFT` and `QA_CURVE` vary the scene and tracked pose. Counts are per complete stereo pair, with main and shadow draws
+reported separately, with exactly two successful stereo scenes per capture.
+Full eye images must agree within 0.02 aggregate RGB; max/mean channel errors
+and nonzero pixel counts are also reported. `QA_CONTROL=1` compares off/off
+to isolate draw-time animation or state changes.
+Private art and screenshots never belong in the distributable kit.

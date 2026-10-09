@@ -109,3 +109,9 @@ fixed-profile fallback and full-rate recovery if the GL request is rejected.
 underlying Vulkan injection foveates the LÖVE scene passes remains unverified;
 no frame-rate improvement is claimed. See [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md)
 for the API/effectiveness distinction and device acceptance gate.
+
+Native VR conservatively skips map mesh chunks outside both tracked eye frusta.
+It preserves visible floor, rooms, objects, full shadow casters, original water
+quality, and recommended eye resolution. `POKEPORT_VR_DRAW_DISTANCE=off` is the
+developer baseline for comparable device timing. Host primitive reduction is not
+a claim of improved headset frame rate.

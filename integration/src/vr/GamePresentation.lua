@@ -3,6 +3,7 @@
 local Runtime = require("src.vr.Runtime")
 local Presentation = {}
 local frame, hud
+local drawDistance
 
 local function library(game)
   local exports = game and game.mods and game.mods.exports
@@ -11,6 +12,7 @@ local function library(game)
 end
 
 function Presentation.endDraw()
+  if drawDistance then drawDistance.finish() end
   if frame and frame.minimap and frame.minimap.draw == frame.captureMinimap then
     frame.minimap.draw = frame.drawMinimap
   end
@@ -25,6 +27,8 @@ function Presentation.beginDraw(game)
   if not Runtime.isBridgeActive() or not Runtime.shouldRender() then return end
   local lib = library(game)
   if not lib then return end
+  drawDistance = drawDistance or require("src.vr.DrawDistance")
+  drawDistance.begin(lib)
   local minimap = lib.require("Minimap")
   local w,h = love.graphics.getDimensions()
   if love.graphics.getPixelDimensions then w,h = love.graphics.getPixelDimensions() end

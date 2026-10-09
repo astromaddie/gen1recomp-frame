@@ -1101,6 +1101,8 @@ function Runtime.shutdown()
   local bridge = state.bridge
   Runtime.abortFrame()
   if monoPanel then monoPanel.release() end
+  local culling = package.loaded["src.vr.DrawDistance"]
+  if culling then culling.release() end
   local stop = type(bridge) == "table"
     and (bridge.shutdown or bridge.destroy) or nil
   if type(stop) == "function" then
