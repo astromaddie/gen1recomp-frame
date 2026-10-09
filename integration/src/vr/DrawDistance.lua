@@ -7,6 +7,7 @@ local Culling = {}
 local ffi = require("ffi")
 local cache, hooks, tick, frusta = {}, {}, 0, nil
 local graphics, metrics
+local profile,profileRestores
 local CELL, MARGIN = 32, 8
 local function clock() return love.timer.getTime() end
 local function prepare(record)
@@ -59,6 +60,7 @@ local function release(record)
   if record.scratch then record.scratch:release() end
 end
 local function uploadSelection(record,selected,field,n)
+  local copyScope=profile and profile.beginCpuScope("vr_range_copy")
   if not record.scratch then record.scratch=love.data.newByteData(record.total*4) end
   local out=ffi.cast("uint32_t*",record.scratch:getFFIPointer())
   local index=0
@@ -67,9 +69,12 @@ local function uploadSelection(record,selected,field,n)
     ffi.copy(out+index,record.packedPointer+r[1]-1,count*4)
     index=index+count
   end end
+  if profile then profile.endCpuScope(copyScope) end
   -- LOVE copies this prefix synchronously; one CPU scratch buffer can serve
   -- the independent terrain and shadow GPU index buffers without aliasing.
+  local uploadScope=profile and profile.beginCpuScope("vr_index_upload")
   selected:setVertexMap(record.scratch,"uint32",n)
+  if profile then profile.endCpuScope(uploadScope) end
 end
 local function register(mesh,visibilityOnly)
   if not mesh then return end
@@ -162,15 +167,19 @@ local function selection(mesh,model,pull)
   local key=tick..":"..ox..":"..oy..":"..oz..":"..pull
   if record.frameKey~=key then
     record.frameKey=key
+    local scope=profile and profile.beginCpuScope("vr_eye_visibility")
     local changed=false
     for _,g in ipairs(record.groups) do
       local keep=visible(g,ox,oy,oz,pull)
       if keep~=g.keep then changed=true;g.keep=keep end
     end
+    if profile then profile.endCpuScope(scope) end
     if changed then
+      scope=profile and profile.beginCpuScope("vr_range_count")
       local n=0
       for _,r in ipairs(record.ranges) do if r[3].keep then n=n+r[2]-r[1]+1 end end
       record.count=n
+      if profile then profile.endCpuScope(scope) end
       if n>0 and n<record.total then
         uploadSelection(record,record.selected,"keep",n)
         metrics.indexUpdates=metrics.indexUpdates+1
@@ -188,9 +197,13 @@ end
 function Culling.finish()
   for i=#hooks,1,-1 do local h=hooks[i];if h[1][h[2]]==h[4] then h[1][h[2]]=h[3] end end
   hooks={}
+  for i=#(profileRestores or {}),1,-1 do profileRestores[i]() end
+  profileRestores=nil;profile=nil
 end
 function Culling.begin(lib)
   Culling.finish();tick=tick+1;frusta=nil
+  local telemetry=package.loaded["src.vr.Telemetry"]
+  profile=telemetry and telemetry.isEnabled() and telemetry or nil
   metrics={sourceIndices=0,selectedIndices=0,pendingDraws=0,indexUpdates=0,readyMeshes=0,preparingMeshes=0,waterPassesSkipped=0}
   local disabled=os.getenv("POKEPORT_VR_DRAW_DISTANCE")=="off"
   metrics.mode=disabled and "off" or "frustum"
@@ -200,7 +213,9 @@ function Culling.begin(lib)
     if record.seen<tick-2 then release(record);cache[mesh]=nil
     elseif not disabled and not record.ready and not record.error and clock()<deadline then
       repeat
+        local scope=profile and profile.beginCpuScope("vr_prepare_indices")
         local ok,err=coroutine.resume(record.worker)
+        if profile then profile.endCpuScope(scope) end
         if not ok then record.error=tostring(err);break end
       until record.ready or clock()>=deadline
     end
@@ -213,6 +228,13 @@ function Culling.begin(lib)
   local Mesher=lib.require("ChunkMesher")
   local Mat=lib.require("Mat4")
   graphics=lib.require("Voxel3D")
+  if profile then
+    profileRestores={
+      profile.wrapCpu(graphics,"draw","mod_draw_submit"),
+      profile.wrapCpu(lib.require("ShadowMap"),"draw","mod_shadow_submit"),
+      profile.wrapCpu(lib.require("Water"),"draw","mod_water_submit"),
+    }
+  end
   hook(require("src.vr.Runtime"),"views",function(original)return function(...)
     local left,right=original(...)
     if left and right then
@@ -268,6 +290,7 @@ function Culling.shadowSelection(mesh,model,clip)
     m[row*4+col]=v
   end end
   local planes={}
+  local visibilityScope=profile and profile.beginCpuScope("vr_light_visibility")
   for axis=0,2 do for _,sign in ipairs({-1,1}) do
     local p={};for j=1,4 do p[j]=m[12+j]+sign*m[axis*4+j] end
     planes[#planes+1]=p
@@ -282,10 +305,13 @@ function Culling.shadowSelection(mesh,model,clip)
     end
     if keep~=g.shadowKeep then changed=true;g.shadowKeep=keep end
   end
+  if profile then profile.endCpuScope(visibilityScope) end
   if changed then
+    local countScope=profile and profile.beginCpuScope("vr_range_count")
     local n=0
     for _,r in ipairs(record.ranges) do if r[3].shadowKeep then n=n+r[2]-r[1]+1 end end
     record.shadowCount=n
+    if profile then profile.endCpuScope(countScope) end
     if n>0 and n<record.total then
       if not record.shadowSelected then
         local selected=love.graphics.newMesh({{"CullingUnused","byte",4}},mesh:getVertexCount(),"triangles","dynamic")

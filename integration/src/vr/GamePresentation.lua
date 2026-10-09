@@ -52,6 +52,10 @@ function Presentation.endDraw()
       and frame.voxelScene.render == frame.telemetrySceneRender then
     frame.voxelScene.render = frame.originalSceneRender
   end
+  if frame and frame.voxelScene and frame.voxelScene.performanceMark==frame.performanceMark then
+    frame.performanceMark(nil)
+    frame.voxelScene.performanceMark=frame.previousPerformanceMark
+  end
   if frame and frame.minimap and frame.minimap.draw == frame.captureMinimap then
     frame.minimap.draw = frame.drawMinimap
   end
@@ -94,11 +98,21 @@ function Presentation.beginDraw(game)
     local originalRender = voxelScene.render
     local function pack(...) return {n=select("#",...),...} end
     frame.voxelScene,frame.originalSceneRender = voxelScene,originalRender
+    frame.previousPerformanceMark=voxelScene.performanceMark
+    local phaseScope
+    frame.performanceMark=function(name)
+      telemetry.endCpuScope(phaseScope)
+      phaseScope=name and telemetry.beginCpuScope(name) or nil
+    end
+    voxelScene.performanceMark=frame.performanceMark
     frame.telemetrySceneRender = function(...)
       frame.sourceEye = frame.sourceEye + 1
       local token = telemetry.beginGpuScope(
         "source_scene_eye" .. tostring(frame.sourceEye), frame.scene)
+      local cpu=telemetry.beginCpuScope("mod_scene")
       local result = pack(pcall(originalRender,...))
+      frame.performanceMark(nil)
+      telemetry.endCpuScope(cpu)
       telemetry.endGpuScope(token)
       if not result[1] then error(result[2],0) end
       return unpack(result,2,result.n)

@@ -244,3 +244,13 @@ unattended refresh. It also verifies fixed/off/missing-optional-API fallback. Ru
 `vrbridge/tests/telemetry_test.cpp` for bounded nested source/shadow GPU timestamps.
 The opt-in source-eye dimensions and AA attribution cannot prove Valve FDM attachment;
 that requires the booked Frame capture/diagnostics and worn validation separately.
+
+Renderer CPU diagnosis: run `luajit integration/tests/renderer_motion_driver_test.lua
+integration/tests/renderer_motion_driver.lua` and the existing telemetry/runtime
+regressions before packaging. The bounded device driver is
+`integration/tests/renderer_motion_driver.lua`, with `POKEPORT_SAVED_SCENE_DRIVER`
+and `GEN1_FRAME_DRIVER_UTIL` set to the private saved-scene loader and public
+helper, and `POKEPORT_VR_TELEMETRY=1`. Allow saved-scene startup plus eight seconds
+warmup and 32 seconds measurement. Read actual movement/scene/settings/eye-size
+records before comparing standing and walking. It keeps yielding after completion
+for evidence collection; the operational owner terminates its owned process.

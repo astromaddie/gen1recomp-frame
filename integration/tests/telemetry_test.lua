@@ -78,6 +78,20 @@ Telemetry.startWindow()
 assert(bridge.resetWindows == 1,
   "the bounded diagnostic window must reset setup-time query drop counters")
 Telemetry.recordFrame(9, { focused = true, shouldRender = true })
+local function advanceCpu(ms)
+  now.wallNs=now.wallNs+ms*1000000;now.mainCpuNs=now.mainCpuNs+ms*1000000
+  now.processCpuNs=now.processCpuNs+ms*1000000
+end
+local parent=Telemetry.beginCpuScope("test_parent");advanceCpu(1)
+local child=Telemetry.beginCpuScope("test_child");advanceCpu(2)
+Telemetry.endCpuScope(child);advanceCpu(3);Telemetry.endCpuScope(parent)
+local owner={fn=function(x)return x,nil,4,nil end}
+local original=owner.fn;local restore=Telemetry.wrapCpu(owner,"fn","test_wrapper")
+local function results(...)assert(select("#",...)==4);assert(select(1,...)=="ok" and select(3,...)==4)end
+results(owner.fn("ok"));restore();assert(owner.fn==original)
+owner.fn=function()error("expected probe failure")end
+restore=Telemetry.wrapCpu(owner,"fn","test_error")
+assert(not pcall(owner.fn));restore()
 local shadowEnabled,speed=true,1
 package.loaded["src.core.FrameCap"]={current=75}
 local settingsGame={logicSpeed=function()return speed end}
@@ -139,6 +153,12 @@ assert(clientLine and clientLine:find("msm:no%-pdev:417895")
   and clientLine:find("busy_pct=50.0"))
 assert(bridge.gpuPolls == 3 and sampleIndex == 2,
   "readiness polling should run per frame while proc/sysfs sampling stays at 1 Hz")
+local attribution
+for _,line in ipairs(lines) do if line:find("%[vr%-cpu%-attribution%]") then attribution=line end end
+assert(attribution and attribution:find("accounting=exclusive%-invocation") and attribution:find("scope_errors=0"),attribution)
+assert(attribution:find("test_parent{calls=1 main_cpu_ms_total=4.000",1,true)
+  and attribution:find("test_child{calls=1 main_cpu_ms_total=2.000",1,true)
+  and attribution:find("main_cpu_ms_total=6.000",1,true),attribution)
 
 Telemetry.setScene("PEWTER_GYM/above", 12)
 now.wallNs = now.wallNs + 1000000000

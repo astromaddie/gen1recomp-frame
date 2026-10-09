@@ -88,3 +88,11 @@
 +  -- The stereo host may retain this immutable terrain/water prefix, then
 +  -- restore color AND depth before the original dynamic caster sequence.
 +  if ShadowMap.staticEnd then ShadowMap.staticEnd() end
+@@ -1005,0 +1013 @@
++  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_prepare") end
+@@ -1107,0 +1116 @@
++  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_shadow_dispatch") end
+@@ -1110,0 +1120 @@
++  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_scene_setup") end
+@@ -1115,0 +1126 @@
++  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_draw_traversal") end

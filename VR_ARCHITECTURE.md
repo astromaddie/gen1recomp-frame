@@ -438,3 +438,25 @@ source FDM attachment remains explicitly unverified. `[vr-shadow-work]` separate
 terrain builds/hits/triangles, dynamic triangles and exact blits. Nested timestamp
 queries retain the outer source-eye span and separate shadow spans in the same
 bounded nonblocking ring; these overlapping spans must not be summed together.
+
+Opt-in renderer attribution (`POKEPORT_VR_TELEMETRY=1`) reports a separate
+`[vr-cpu-attribution]` record. Its wall/main/process totals subtract nested scopes
+per invocation before aggregation; the named exclusive totals can be added within
+that record. Coverage is instrumented scopes, not the whole application thread.
+The older stage percentiles and GPU scopes remain overlapping and non-additive.
+Scope names identify callsites: `vr_index_upload` includes any LOVE/driver CPU
+inside `setVertexMap`, and `mod_*_submit` includes CPU inside the submitted graphics
+calls. These labels do not prove whether Lua, LOVE or Zink implements the cost.
+The optional diagnostic pays clock/table/wrapper overhead; normal rendering does
+not install these wrappers. VoxelScene markers separate preparation, shadow
+dispatch, scene setup and draw traversal without changing their order or inputs.
+
+`renderer_motion_driver.lua` wraps the actual game update/draw and engine UI/
+composition plus DRAMALESS update/atlas/mesher work. After eight seconds warmup,
+it measures 5/11/5/11 second standing/walking phases using original Game gamepad
+callbacks. Safe adjacent moves use the game's collision checks and avoid grass
+and warps. Monotonic timestamps, map, player and camera coordinates, accumulated
+travel, held-source provenance and phase identities allow comparison with native
+CPU samples. Motion is observed, not assumed; leaving the overworld aborts and
+releases inputs. Completion, errors and quit restore wrappers and release D-pad
+sources. The driver neither writes settings nor changes tracked head poses.

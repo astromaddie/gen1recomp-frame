@@ -45,6 +45,11 @@ local function clock()
   return nil
 end
 
+function Telemetry.monotonicNs()
+  if not enabled then return nil end
+  local value=clock();return value and value.wallNs
+end
+
 local function bucketFor(scene)
   local key = scene or "unknown"
   local bucket = state.buckets[key]
@@ -192,6 +197,8 @@ end
 function Telemetry.setScene(scene, frame)
   if not enabled then return end
   scene = type(scene) == "string" and scene ~= "" and scene or "unknown"
+  state.baseScene=scene
+  if state.phase then scene=scene.."/phase="..state.phase end
   if state.scene ~= scene then
     state.sceneChangesSinceSample = state.sceneChangesSinceSample + 1
     state.scene = scene
@@ -200,6 +207,12 @@ function Telemetry.setScene(scene, frame)
   if bridge and type(bridge.telemetryContext) == "function" then
     pcall(bridge.telemetryContext, state.frame, state.scene)
   end
+end
+
+function Telemetry.setPhase(phase)
+  if not enabled then return end
+  state.phase=phase
+  Telemetry.setScene(state.baseScene or "unknown")
 end
 
 function Telemetry.beginStage(name)
@@ -218,6 +231,61 @@ function Telemetry.endStage(token)
     math.max(0, safeNumber(finish.wallNs) - safeNumber(before.wallNs)),
     math.max(0, safeNumber(finish.processCpuNs) - safeNumber(before.processCpuNs)),
     math.max(0, safeNumber(finish.mainCpuNs) - safeNumber(before.mainCpuNs)))
+end
+
+-- Diagnostic CPU ownership scopes. Children are subtracted on this exact
+-- invocation before aggregation; independently aggregated percentiles are
+-- never subtracted. Existing wall/GPU stage summaries remain non-additive.
+function Telemetry.beginCpuScope(name)
+  if not enabled or not state.armed then return nil end
+  local now=clock();if not now then return nil end
+  local token={name=name,scene=state.scene,frame=state.frame,clock=now,parent=state.cpuScope,
+    childWall=0,childMain=0,childProcess=0}
+  state.cpuScope=token
+  return token
+end
+
+function Telemetry.endCpuScope(token)
+  if not token then return end
+  if state.cpuScope~=token then
+    state.cpuScope=nil
+    local bucket=bucketFor(token.scene)
+    bucket.cpuScopeErrors=(bucket.cpuScopeErrors or 0)+1
+    return
+  end
+  state.cpuScope=token.parent
+  local after=clock();if not after then return end
+  local wall=math.max(0,safeNumber(after.wallNs)-safeNumber(token.clock.wallNs))
+  local main=math.max(0,safeNumber(after.mainCpuNs)-safeNumber(token.clock.mainCpuNs))
+  local process=math.max(0,safeNumber(after.processCpuNs)-safeNumber(token.clock.processCpuNs))
+  if token.parent then
+    local p=token.parent
+    p.childWall=p.childWall+wall;p.childMain=p.childMain+main;p.childProcess=p.childProcess+process
+  end
+  local bucket=bucketFor(token.scene)
+  bucket.cpuFirstFrame=math.min(bucket.cpuFirstFrame or token.frame,token.frame)
+  bucket.cpuLastFrame=math.max(bucket.cpuLastFrame or token.frame,token.frame)
+  bucket.cpuSelf=bucket.cpuSelf or {}
+  local value=bucket.cpuSelf[token.name] or {calls=0,wall=0,main=0,process=0}
+  bucket.cpuSelf[token.name]=value
+  value.calls=value.calls+1;value.wall=value.wall+math.max(0,wall-token.childWall)
+  value.main=value.main+math.max(0,main-token.childMain)
+  value.process=value.process+math.max(0,process-token.childProcess)
+end
+
+function Telemetry.wrapCpu(owner,key,name)
+  if not enabled or type(owner[key])~="function" then return function()end end
+  local original,own=owner[key],rawget(owner,key)
+  local function pack(...)return {n=select("#",...),...}end
+  local wrapper=function(...)
+    local token=Telemetry.beginCpuScope(name)
+    local result=pack(pcall(original,...))
+    Telemetry.endCpuScope(token)
+    if not result[1] then error(result[2],0) end
+    return unpack(result,2,result.n)
+  end
+  owner[key]=wrapper
+  return function()if owner[key]==wrapper then owner[key]=own end end
 end
 
 function Telemetry.beginGpuScope(name, scene)
@@ -328,6 +396,7 @@ function Telemetry.startWindow()
   state.buckets = {}
   state.frameClock = nil
   state.settings = nil
+  state.cpuScope = nil
   state.armed = true
   state.firstFrame = state.frame + 1
   state.lastSampleWallNs = nil
@@ -360,6 +429,20 @@ end
 
 local function printSceneBuckets(loadSample, windowScene)
   for scene, bucket in pairs(state.buckets) do
+    if bucket.cpuSelf then
+      local parts,total={},0
+      for name,value in pairs(bucket.cpuSelf) do
+        parts[#parts+1]=string.format("%s{calls=%d main_cpu_ms_total=%s process_cpu_ms_total=%s wall_ms_total=%s}",
+          name,value.calls,milliseconds(value.main),milliseconds(value.process),milliseconds(value.wall))
+        total=total+value.main
+      end
+      table.sort(parts)
+      print("[vr-cpu-attribution]","scene="..scene,
+        "frame="..tostring(bucket.cpuFirstFrame).."-"..tostring(bucket.cpuLastFrame),
+        "accounting=exclusive-invocation","coverage=instrumented-scopes",
+        "scope_errors="..tostring(bucket.cpuScopeErrors or 0),"main_cpu_ms_total="..milliseconds(total),
+        "stages="..table.concat(parts,";"))
+    end
     if bucket.frames > 0 then
       local culler = bucket.culler
       local cullerText = string.format("culler_mode=%s culler_active=%s culler_samples=%d index_updates=%d source_indices=%d selected_indices=%d pending_draws=%d water_passes_skipped=%d",
