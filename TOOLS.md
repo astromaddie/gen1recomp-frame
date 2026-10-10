@@ -313,3 +313,23 @@ images under equal poses with visibility selection off/on, records actual card
 bounds/IPD/pass counts, exercises original Fight/B actions and battle exit/re-entry.
 The synthetic pose changes before the following XR frame is prepared; do not
 compare two draws across a pose change inside one update.
+
+For the battle comfort repair, run `battle_presentation_test.lua
+integration/src/vr` and `battle_scale_test.lua integration/src/vr` with LuaJIT
+and `POKEPORT_XRBRIDGE=fake`. The battle scene driver additionally loads
+`battle_depth_probe.lua` beside `driver_util.lua`; this QA-only helper checks the
+actual scene-depth/HUD ordering, including downward pitch. Set `POKEPORT_QA_MAP`
+to `PEWTER_GYM` for the interior fixture. To test existing player settings, copy
+them to the isolated test data directory's `options.lua` **before launching**
+LÖVE; late `Game:applyOptions` does not invalidate the mod's cached settings.
+Set `POKEPORT_QA_EXPECT_RES=4` for a copied RES4 configuration, or `1` for the
+source default FULL configuration. The driver asserts the live value.
+The source-only package allowlist already carries every overlay module; no
+new runtime dependency, native ABI, asset or package rule is required.
+The host driver drains the original incremental terrain pump during fixture
+setup, before starting the authoritative transition; it asserts an empty mesh
+queue and ready terrain. Every transition and battle logic tick follows the
+original update path. The QA driver draws asserted transition stages, the first
+battle presentation, required stereo comparisons and return effects; it omits
+redundant intro raster work between captures. Eye size and scene geometry remain
+unchanged. These are host test shortcuts, not production performance changes.

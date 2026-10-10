@@ -1,6 +1,9 @@
 -- Repeat only the existing arena/card draw, never battle update or capture.
 local Runtime=require("src.vr.Runtime")
-local Battle={}
+-- Battles use twice the physical scale of the overworld. The authored
+-- wide view and all art stay the same angular size; nearby floor/cards now
+-- sit beyond the one-metre UI instead of conflicting with its disparity.
+local Battle={WORLD_UNITS_PER_METER=24,HUD_DISTANCE=1}
 function Battle.active()
   return Runtime.isEnabled() and Runtime.isBridgeActive() and Runtime.shouldRender()
 end
@@ -17,6 +20,7 @@ function Battle.render(V,session,drawActors)
   vrArena.cam="wide"
   local base,pitch=V.require("BattleCam").rig(vrArena,ground)
   base.mode="battle"
+  base.worldUnitsPerMeter=Battle.WORLD_UNITS_PER_METER
   local left,right=Runtime.views(base,1)
   if not (left and right) then return nil end
   local services=context.services

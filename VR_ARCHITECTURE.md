@@ -57,7 +57,22 @@ cells, original card capture/art/back-sprite policy, saved options and flat mode
 stay with the source. Original battle state/UI draw and provider update/capture
 run once; only terrain and card drawing repeats. The existing visibility hooks
 consume the battle's tracked cameras without another culling implementation.
-The battle HUD remains the original transparent native UI projected per eye.
+The battle HUD remains the original transparent native UI, placed at 1 m with
+proportional dimensions to preserve its angular size. Battles explicitly use
+24 world pixels/metre, versus 48 for the overworld: a larger physical arena
+with the same authored angular camera, rather than backing away and shrinking
+the combatants. Both measured IPD and head translation use this conversion; the
+lean clamp scales with it to retain the same physical travel. At 24 world pixels/metre, the test runtime's 64 mm IPD is 1.536 world pixels;
+the same raw eye separation is 3.072 world pixels in the overworld. The override is
+per camera and cannot persist into the overworld, flat mode or a later session.
+There is no additional battle seat setback, FOV override, or geometry removal.
+
+The engine declares its battle wipe and palette veil during state drawing but
+paints them after its `uiComposite` snapshot. The VR adapter now repeats the
+original `drawBattleWipe` on each finished eye, preserving style, progress and
+source tile-grid calculation, then applies the source palette veil. World fades
+remain before the UI, matching `Renderer:endFrame`. No transition update runs
+inside an eye pass. Graphics and callback scopes restore on errors.
 The existing arena option defaults ON in pinned 97ca3e1f; explicit OFF is respected.
 
 Within an actual XR draw only, the adapter caches `Player:pose()` once and
@@ -171,7 +186,9 @@ ROMs, caches and saves are excluded from every distributable kit manifest.
 The user's Mac Yellow save and backup are snapshotted and hash-checked without
 modifying their original bytes, timestamps or permissions.
 
-Known limits: the new laser and stereo battle presentation remain headset-unverified.
+Known limits: the wearer confirmed the laser and stereo battles working, then
+reported missing battle transitions and HUD depth conflict. The subsequent
+composition/depth repair requires a new worn check.
 Move/Poké Ball screen-space effects retain their original UI-plane behavior;
 complete combat-effect correspondence, all arena placements and worn HUD
 readability have not been accepted. Current upstream Gen 2/3 and arbitrary Mac
@@ -515,7 +532,8 @@ left stick, receives right-stick scrolling, and the original game Input ignores
 launcher trigger/pose fields. The render harness draws the original importer
 UI/assets and checks that the full procedural dot is above its source in both eyes.
 
-The private Yellow/Pewter host run uses the real standalone host, terrain,
+The initial host run, before the physical-scale repair below, used the real
+Yellow/Pewter standalone host, terrain,
 original Pidgey/Nidoran cards, and Fight/move-select/B controls. At 1728-square
 native eye targets, the authored wide rig produced approximately 113x135-pixel
 Pidgey and 214x235-pixel Nidoran opaque-card bounds. It executes two arena/card
@@ -528,3 +546,33 @@ The original battle-return fade completes, overworld stereo resumes with preserv
 physical IPD, and a second encounter creates and clears a fresh provider session.
 Private evidence is in work/pointer-battle-qa beside the checkout; no game art
 or player data is distributed in the kit.
+
+## Battle transition and HUD depth repair checks
+
+`battle_presentation_test.lua` exercises production composition ordering,
+original-effect dispatch, flat bypass and graphics/callback error cleanup.
+`battle_scale_test.lua` checks measured eye separation, unchanged runtime FOV,
+metre-consistent translation clamps, recenter and battle/overworld re-entry.
+The shared panel tests preserve angular corners and upright orientation under
+yaw, roll and translation while changing the HUD distance.
+
+`battle_scene_driver.lua` runs the real Yellow battle host and original
+`BattleTransition` closing mask at ticks 1, 27 and 54 of its 54-tick shrink.
+Both eyes reach full black; original return-from-white palette steps also cover
+both eyes. Fight, move select, B, authoritative finish, overworld stereo, a
+second VR encounter and the original single-pass flat arena are exercised.
+`battle_depth_probe.lua` is host-test-only: it reads the actual scene depth and
+original opaque UI footprint, reconstructs eye-forward metres using each actual
+camera's near/far planes, and independently calibrates against rays intersecting
+the authored floor. It requires positive depth separation at neutral, tracked
+yaw/roll/translation, and a 15-degree downward head pitch. No such GPU readback
+or depth scan exists in production. The render comparison retains the existing
+full-eye culling equality check; cards use original capture/art throughout.
+
+Private evidence and executable isolated-data runners are in
+`work/battle-repair-qa` beside the checkout. The live saved RES4 setting is loaded
+before mod startup for the gym fixture and checked directly, alongside the
+default FULL setting in the outdoor fixture. Native eye targets stay 1728 square
+in these host tests. These checks establish source composition and stereo
+geometry for the measured fixtures, not headset comfort or every possible arena
+and head pose. Worn validation remains necessary.

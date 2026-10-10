@@ -16,7 +16,8 @@ end
 function Panel.reset() anchor = nil; pointer = nil end
 function Panel.setPointer(value) pointer = value end
 
-function Panel.placement(views, followPitch)
+function Panel.placement(views, followPitch, distance)
+  distance = distance or DISTANCE
   local first, second = views[1], views[2]
   local fx, fy, fz = rotate(first.orientation, 0, 0, -1)
   local horizontal = math.sqrt(fx * fx + fz * fz)
@@ -24,10 +25,10 @@ function Panel.placement(views, followPitch)
   if horizontal > 1e-6 then rx, rz = -fz / horizontal, fx / horizontal end
   if not followPitch then fx, fy, fz = rz, 0, -rx end
   return {
-    x = (first.position.x + second.position.x) / 2 + fx * DISTANCE,
-    y = (first.position.y + second.position.y) / 2 + fy * DISTANCE,
-    z = (first.position.z + second.position.z) / 2 + fz * DISTANCE,
-    rx = rx, rz = rz,
+    x = (first.position.x + second.position.x) / 2 + fx * distance,
+    y = (first.position.y + second.position.y) / 2 + fy * distance,
+    z = (first.position.z + second.position.z) / 2 + fz * distance,
+    rx = rx, rz = rz, scale = distance / DISTANCE,
     ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy,
   }
 end
@@ -119,7 +120,7 @@ end
 local function draw(source, view, target, placement, overlay)
   local sw, sh = source:getDimensions()
   -- Fit tall screens too, preserving the entire original desktop layout.
-  local width = math.min(WIDTH, WIDTH * sw / sh)
+  local width = math.min(WIDTH, WIDTH * sw / sh) * (placement.scale or 1)
   local height = width * sh / sw
   if not shader then
     shader = love.graphics.newShader([[
@@ -171,8 +172,8 @@ end
 
 -- HUD follows yaw/pitch, stays level with gravity, and is projected with the
 -- full eye pose (including roll). Transparent pixels leave the world intact.
-function Panel.composite(source, views, eyeIndex, target)
-  draw(source, views[eyeIndex], target, Panel.placement(views, true), true)
+function Panel.composite(source, views, eyeIndex, target, distance)
+  draw(source, views[eyeIndex], target, Panel.placement(views, true, distance), true)
 end
 
 function Panel.release()

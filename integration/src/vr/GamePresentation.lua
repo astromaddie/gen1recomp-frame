@@ -159,11 +159,32 @@ local function stagedBattle(game)
   return shot and shot.canvas ~= nil
 end
 
+-- Preserve the source ordering: world fade, original UI, wipe, palette veil.
+local function surfaceEffect(target,draw)
+  love.graphics.push("all")
+  local ok,err=pcall(function()
+    love.graphics.setCanvas(target)
+    love.graphics.origin()
+    love.graphics.setShader()
+    love.graphics.setScissor()
+    love.graphics.setStencilTest()
+    love.graphics.setDepthMode()
+    love.graphics.setColorMask(true,true,true,true)
+    love.graphics.setBlendMode("alpha","alphamultiply")
+    draw(target:getDimensions())
+  end)
+  love.graphics.pop()
+  if not ok then error(err,0) end
+end
+
 function Presentation.finish(game, finish, monoCanvas)
   if not frame or not Runtime.isBridgeActive() or not Runtime.shouldRender() then return finish() end
   local Renderer = require("src.render.Renderer")
   local original = Renderer.compositeUi
-  local battle = stagedBattle(game) and not game.mods.exports.DRAMALESS_SHAPE
+  local staged=stagedBattle(game)
+  local battle = staged and not game.mods.exports.DRAMALESS_SHAPE
+  local hudDistance=staged and game.mods.exports.DRAMALESS_SHAPE
+    and require("src.vr.BattleStereo").HUD_DISTANCE or nil
   local eye = 0
   Renderer.compositeUi = function(self, target)
     if battle then return true end
@@ -187,7 +208,31 @@ function Presentation.finish(game, finish, monoCanvas)
     end
     eye = eye + 1
     assert(eye <= 2,"unexpected extra eye UI composite")
-    return Runtime.compositeHud(frame.source,target,eye)
+    if self.worldFadeAlpha and self.worldFadeAlpha>0 then
+      surfaceEffect(target,function(w,h)
+        love.graphics.setColor(0,0,0,self.worldFadeAlpha)
+        love.graphics.rectangle("fill",0,0,w,h)
+      end)
+    end
+    local result = Runtime.compositeHud(frame.source,target,eye,hudDistance)
+    -- Source endFrame paints these after its UI snapshot. Repeat only their
+    -- drawing over each finished eye; state/timers still advance once.
+    local wipe,veil=self.battleWipe,self.screenVeil
+    if wipe or (veil and veil[2]>0) then
+      surfaceEffect(target,function(w,h)
+        local ui=self.uiComposite
+        if wipe and ui then
+          local fit=math.min(w/ui.ww,h/ui.wh)
+          local vw,vh=ui.vpw*fit,ui.vph*fit
+          self:drawBattleWipe(wipe,w,h,(w-vw)/2,(h-vh)/2,vw,vh,ui.sx*fit,ui.sy*fit)
+        end
+        if veil and veil[2]>0 then
+          love.graphics.setColor(veil[1],veil[1],veil[1],veil[2])
+          love.graphics.rectangle("fill",0,0,w,h)
+        end
+      end)
+    end
+    return result
   end
   local ok,handled,mirror = pcall(finish)
   Renderer.compositeUi = original

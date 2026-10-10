@@ -12,7 +12,11 @@ and settings interfaces.
 The existing dialogue and menu artwork is collected into a transparent
 surface and projected per eye over the world. Staged battles render the public
 mod's arena and original Pokémon sprite cards through two head-tracked cameras,
-with the original battle UI on the shared HUD plane. VR uses the mod's authored
+with the original battle UI on a one-metre HUD plane at its existing angular
+size. Battles use 24 world pixels per metre (twice the overworld's physical
+scale) so nearby arena geometry sits behind that UI. Runtime eye separation and
+head movement use the same metric conversion. Original closing masks and palette
+fades cover both eyes with their source timing. VR uses the mod's authored
 wide battle rig because its telephoto lens is unsuitable for the headset FOV;
 flat presentation and saved battle options remain unchanged.
 Physical controller behavior, comfort, sustained performance and sleep/resume
@@ -79,7 +83,8 @@ copied save can show the game's existing mod load report before Continue.
 
 `POKEPORT_VR_CAMERA_SETBACK_METERS` optionally moves ABOVE and third-person
 cameras back along their existing viewing direction (0–3 m, default 0).
-POV, head tracking and the 48 pixels/metre world scale remain unchanged.
+POV and the overworld's 48 pixels/metre world scale remain unchanged.
+Staged battles use their separate 24 pixels/metre conversion and no extra setback.
 The wearer accepted an explicitly requested 0.75 m distance in the Pewter City
 comparison. Explicit zero preserves the original camera distance. HUD readability remains unverified.
 

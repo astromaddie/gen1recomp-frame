@@ -63,17 +63,18 @@ local function copyVector(value)
   return { x = value.x, y = value.y, z = value.z }
 end
 
-local function clampPoseOffset(eye, anchor)
+local function clampPoseOffset(eye, anchor, scale)
+  scale = scale or 1
   local dx = eye.x - anchor.x
   local dy = eye.y - anchor.y
   local dz = eye.z - anchor.z
   local horizontal = math.sqrt(dx * dx + dz * dz)
-  if horizontal > POSE_MAX_HORIZONTAL_OFFSET and horizontal > 0 then
-    local scale = POSE_MAX_HORIZONTAL_OFFSET / horizontal
-    dx, dz = dx * scale, dz * scale
+  if horizontal > POSE_MAX_HORIZONTAL_OFFSET * scale and horizontal > 0 then
+    local factor = POSE_MAX_HORIZONTAL_OFFSET * scale / horizontal
+    dx, dz = dx * factor, dz * factor
   end
-  dy = math.max(-POSE_MAX_VERTICAL_DOWN,
-               math.min(POSE_MAX_VERTICAL_UP, dy))
+  dy = math.max(-POSE_MAX_VERTICAL_DOWN * scale,
+               math.min(POSE_MAX_VERTICAL_UP * scale, dy))
   return {
     x = anchor.x + dx,
     y = anchor.y + dy,
@@ -468,6 +469,11 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
   -- OpenXR reports meters in a local reference space; the voxel renderer uses
   -- map pixels. Anchor the first tracked pose to the current game camera and
   -- apply only subsequent movement in a small, explicit world scale.
+  -- A staged battle may use a larger physical scene without changing its
+  -- authored angular camera or the headset's FOV/IPD. Keep all tracked
+  -- metres, including the lean limits, in this camera's same unit system.
+  local poseScale=tonumber(baseCamera.worldUnitsPerMeter)
+  if not finiteNumber(poseScale) or poseScale<=0 then poseScale=state.poseScale end
   local center = defaultCenter(baseCamera)
   local baseFocus = defaultFocus(baseCamera, center)
   local baseForward = normalizedVector({
@@ -493,9 +499,9 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
         offset = quaternionRotate(quaternionConjugate(state.poseOrigin.orientation), offset)
       end
       return {
-        x = (baseRight.x * offset.x + baseUp.x * offset.y - baseForward.x * offset.z) * state.poseScale,
-        y = (baseRight.y * offset.x + baseUp.y * offset.y - baseForward.y * offset.z) * state.poseScale,
-        z = (baseRight.z * offset.x + baseUp.z * offset.y - baseForward.z * offset.z) * state.poseScale,
+        x = (baseRight.x * offset.x + baseUp.x * offset.y - baseForward.x * offset.z) * poseScale,
+        y = (baseRight.y * offset.x + baseUp.y * offset.y - baseForward.y * offset.z) * poseScale,
+        z = (baseRight.z * offset.x + baseUp.z * offset.y - baseForward.z * offset.z) * poseScale,
       }
     end
     -- Translation and rotation must share the recentered camera basis.
@@ -505,7 +511,7 @@ local function bridgeCamera(baseCamera, fallback, rawView, name, index, aspect)
     local head = inCameraBasis(state.poseOrigin.currentPosition or origin)
     local clamped = clampPoseOffset({
       x = anchor.x + head.x, y = anchor.y + head.y, z = anchor.z + head.z,
-    }, anchor)
+    }, anchor, poseScale / state.poseScale)
     -- Clamp the head centre, not each eye independently: eye-wise clamping
     -- collapses IPD at the lean boundary and changes apparent world scale.
     eye = { x = clamped.x + offset.x - head.x,
@@ -982,10 +988,10 @@ function Runtime.views(baseCamera, aspect)
   return left, right
 end
 
-function Runtime.compositeHud(source, target, eyeIndex)
+function Runtime.compositeHud(source, target, eyeIndex, distance)
   if not state.bridgeActive or not state.frameViews then return false end
   monoPanel = monoPanel or require("src.vr.MonoPanel")
-  monoPanel.composite(source, state.frameViews, eyeIndex, target)
+  monoPanel.composite(source, state.frameViews, eyeIndex, target, distance)
   return true
 end
 
