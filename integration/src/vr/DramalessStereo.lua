@@ -13,6 +13,7 @@ function Stereo.active(ctx)
     and ctx.state == require("src.core.Game").overworld
 end
 function Stereo.beginFrame() pending=nil end
+function Stereo.queue(left,right) pending={left,right} end
 function Stereo.baseCamera(V,ctx)
   local voxel,fp,graphics=V.require("VoxelState"),V.require("FirstPerson"),V.require("Voxel3D")
   local cx,cy=ctx.state.camera.x+ctx.vw/2,ctx.state.camera.y+ctx.vh/2

@@ -10,8 +10,11 @@ onto a shared 1.9 m screen at 2 m through each eye's projection, preserving
 aspect ratio and binocular alignment. This port preserves the existing camera
 and settings interfaces.
 The existing dialogue and menu artwork is collected into a transparent
-surface and projected per eye over the world. Staged battles use the completed
-original battle screen on the shared plane instead of filling both eye textures.
+surface and projected per eye over the world. Staged battles render the public
+mod's arena and original Pokémon sprite cards through two head-tracked cameras,
+with the original battle UI on the shared HUD plane. VR uses the mod's authored
+wide battle rig because its telephoto lens is unsuitable for the headset FOV;
+flat presentation and saved battle options remain unchanged.
 Physical controller behavior, comfort, sustained performance and sleep/resume
 still require device and worn acceptance.
 
@@ -51,11 +54,17 @@ headset controller runtime is available. Keep the game and kit in
 
 ## Controls
 
-Left stick / D-pad move in game, and move the existing launcher pointer.
+Either controller can aim the launcher laser; the right hand has priority when
+both are tracked. Release, then squeeze its trigger to click. The thin cyan beam
+and white-edged cyan dot use the same physical screen geometry as the launcher.
+Tracking/focus loss disarms clicks until release. Left stick / D-pad move in game
+and take over the original launcher cursor; right stick scrolls launcher lists.
 Right A confirms, B cancels in game. Right Menu is Start; short left View is
 Select; holding View for one second recentres the VR camera. In the launcher,
 A clicks a tab/button and Menu plays the selected imported game.
-These bindings are source-implemented; physical input acceptance remains open.
+These bindings have host routing/render tests; physical input acceptance remains open.
+`POKEPORT_VR_POINTER_TRACE=1` emits bounded native binding/focus and pointer
+validity/hit/click samples for diagnostics; it does not inject input.
 
 The existing VOXEL Options row selects elevated angles (ABOVE), 1ST (POV),
 and 3RD. DRAMALESS owns its existing free-camera controls and third-person

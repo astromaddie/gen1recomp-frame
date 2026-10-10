@@ -1206,6 +1206,9 @@ function Runtime.abortFrame()
   return true
 end
 
+function Runtime.frameViews() return state.frameViews end
+
+local pointerTraceCount,pointerTraceTime=0,-math.huge
 function Runtime.pollActions()
   if not ensureStarted() then return {} end
   if not state.bridgeActive then return {} end
@@ -1219,6 +1222,15 @@ function Runtime.pollActions()
   end
   if type(status) ~= "table" or type(status.actions) ~= "table" then
     return {}
+  end
+  if os.getenv("POKEPORT_VR_POINTER_TRACE")=="1" and pointerTraceCount<180 then
+    local now=love.timer and love.timer.getTime() or os.clock()
+    if now-pointerTraceTime>=1 then
+      pointerTraceTime=now;pointerTraceCount=pointerTraceCount+1
+      print(string.format("[vr-pointer-native] focused=%s render=%s available=%s frameBindings=%s",
+        tostring(status.focused),tostring(status.shouldRender),tostring(status.actions.available),
+        tostring(status.frameControllerBindingsSuggested)))
+    end
   end
   return status.actions
 end

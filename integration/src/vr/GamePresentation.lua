@@ -163,7 +163,7 @@ function Presentation.finish(game, finish, monoCanvas)
   if not frame or not Runtime.isBridgeActive() or not Runtime.shouldRender() then return finish() end
   local Renderer = require("src.render.Renderer")
   local original = Renderer.compositeUi
-  local battle = stagedBattle(game)
+  local battle = stagedBattle(game) and not game.mods.exports.DRAMALESS_SHAPE
   local eye = 0
   Renderer.compositeUi = function(self, target)
     if battle then return true end

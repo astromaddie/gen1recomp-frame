@@ -1,12 +1,12 @@
 --- a/main.lua
 +++ b/main.lua
-@@ -14,0 +15,5 @@
+@@ -14,0 +15,139 @@
 +local startupTrace = os.getenv("POKEPORT_VR_STARTUP_TRACE") == "1"
 +  and require("src.vr.StartupTrace") or nil
 +local vrSuspended = false
 +local vrPausedAudio = nil
 +local vrVsyncDisabled = false
-@@ -15,0 +21,116 @@
++
 +local function vrInputAllowed()
 +  return not VRRuntime.isBridgeActive() or VRRuntime.shouldSimulate()
 +end
@@ -40,9 +40,11 @@
 +end
 +
 +local vrImporterHeld = {}
-+local vrImporterMoveX, vrImporterMoveY = 0, 0
++local vrImporterMoveX, vrImporterMoveY, vrImporterScrollY = 0, 0, 0
 +
 +local function resetVRImporterInput()
++  local pointer = package.loaded["src.vr.LauncherPointer"]
++  if pointer then pointer.reset() end
 +  if Importer then
 +    for button, held in pairs(vrImporterHeld) do
 +      if held and type(Importer.gamepadreleased) == "function" then
@@ -53,13 +55,16 @@
 +      if vrImporterMoveX ~= 0 then
 +        pcall(Importer.gamepadaxis, Importer, nil, "leftx", 0)
 +      end
++      if vrImporterScrollY ~= 0 then
++        pcall(Importer.gamepadaxis, Importer, nil, "righty", 0)
++      end
 +      if vrImporterMoveY ~= 0 then
 +        pcall(Importer.gamepadaxis, Importer, nil, "lefty", 0)
 +      end
 +    end
 +  end
 +  vrImporterHeld = {}
-+  vrImporterMoveX, vrImporterMoveY = 0, 0
++  vrImporterMoveX, vrImporterMoveY, vrImporterScrollY = 0, 0, 0
 +end
 +
 +local function importerStillCurrent(current)
@@ -67,7 +72,9 @@
 +  -- Play/editor callbacks synchronously replace the launcher. Do not forward
 +  -- remaining held actions to either the retired launcher or its replacement.
 +  vrImporterHeld = {}
-+  vrImporterMoveX, vrImporterMoveY = 0, 0
++  vrImporterMoveX, vrImporterMoveY, vrImporterScrollY = 0, 0, 0
++  local pointer = package.loaded["src.vr.LauncherPointer"]
++  if pointer then pointer.reset() end
 +  return false
 +end
 +
@@ -84,6 +91,11 @@
 +  end
 +
 +  local actions = VRRuntime.pollActions()
++  if VRRuntime.frameViews then
++    local w,h = love.graphics.getDimensions()
++    require("src.vr.LauncherPointer").update(current, actions, VRRuntime.frameViews(), w,h)
++    if not importerStillCurrent(current) then return end
++  end
 +  local buttons = {
 +    a = actions.a == true,
 +    b = actions.b == true,
@@ -110,6 +122,12 @@
 +  -- OpenXR's stick Y is positive up; LÖVE's gamepad axis is positive down.
 +  local moveY = -(tonumber(move.y) or 0)
 +  if type(Importer.gamepadaxis) == "function" then
++    local scrollY = -(tonumber(actions.scrollY) or 0)
++    if scrollY ~= vrImporterScrollY then
++      current:gamepadaxis(nil, "righty", scrollY)
++      if not importerStillCurrent(current) then return end
++      vrImporterScrollY = scrollY
++    end
 +    if moveX ~= vrImporterMoveX then
 +      current:gamepadaxis(nil, "leftx", moveX)
 +      if not importerStillCurrent(current) then return end
@@ -122,12 +140,11 @@
 +    end
 +  end
 +end
-+
-@@ -158,0 +280 @@
+@@ -158,0 +298 @@
 +  if startupTrace then startupTrace.mark("boot-enter", VRRuntime, version) end
-@@ -171,0 +294 @@
+@@ -171,0 +312 @@
 +  if startupTrace then startupTrace.mark("game-load-enter", VRRuntime, version) end
-@@ -172,0 +296,14 @@
+@@ -172,0 +314,14 @@
 +  if startupTrace then startupTrace.mark("game-load-exit", VRRuntime, version) end
 +  -- A fresh VR install should enter the existing stereo voxel pipeline.
 +  -- Preserve every explicit player choice, including voxel level zero.
@@ -142,7 +159,7 @@
 +      end
 +    end
 +  end
-@@ -186,15 +323,8 @@
+@@ -186,16 +341,19 @@
 -  -- The one-click headset launcher sets this guard so a missing headset,
 -  -- loader, or native bridge cannot silently turn a VR launch into a desktop
 -  -- run. Direct developer launches retain the older graceful preview mode.
@@ -158,6 +175,7 @@
 -        .. tostring(status.bridgeError or status.lastError
 -          or "the OpenXR bridge did not become active"), 0)
 -    end
+-  end
 +end
 +
 +local function startRequiredVR()
@@ -166,7 +184,7 @@
 +  local w, h = love.graphics.getDimensions()
 +  if love.graphics.getPixelDimensions then
 +    w, h = love.graphics.getPixelDimensions()
-@@ -201,0 +332,10 @@
++  end
 +  if startupTrace then startupTrace.mark("xr-start-enter", VRRuntime) end
 +  VRRuntime.start(w, h)
 +  if startupTrace then startupTrace.mark("xr-start-exit", VRRuntime) end
@@ -177,19 +195,19 @@
 +        or "the OpenXR bridge did not become active"), 0)
 +  end
 +  return true
-@@ -204,0 +345 @@
+@@ -204,0 +363 @@
 +  if startupTrace then startupTrace.mark("love-load-enter", VRRuntime) end
-@@ -228,0 +370,4 @@
+@@ -228,0 +388,4 @@
 +  -- Initialize required OpenXR before the title/importer UI is created so a
 +  -- packaged headset launch never leaves the player at an inaccessible flat
 +  -- launcher if the bridge cannot start.
 +  startRequiredVR()
-@@ -293,0 +439,4 @@
+@@ -293,0 +457,4 @@
 +  if not updateVRActivity() then
 +    resetVRImporterInput()
 +    return
 +  end
-@@ -296 +445,6 @@
+@@ -296 +463,6 @@
 -  if Importer then return Importer:update(dt) end
 +  if Importer then
 +    local current = Importer
@@ -197,20 +215,18 @@
 +    if Importer == current then return current:update(dt) end
 +    return -- The newly opened game/editor starts updating next frame.
 +  end
-@@ -440 +594 @@
+@@ -440 +612 @@
 -  local dramatic = exports and exports.DRAMATIC_SHAPE
 +  local dramatic = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
-@@ -443 +597,3 @@
+@@ -443 +615,3 @@
 -    local ok, handled, mirrorCanvas = pcall(finish)
 +    local ok, handled, mirrorCanvas = pcall(function()
 +      return require("src.vr.GamePresentation").finish(Game, finish, vrOutputCanvas)
 +    end)
-@@ -456 +612 @@
+@@ -456 +630 @@
 -  local dramatic = exports and exports.DRAMATIC_SHAPE
 +  local dramatic = exports and (exports.DRAMALESS_SHAPE or exports.DRAMATIC_SHAPE)
-@@ -473,0 +630,19 @@
-+end
-+
+@@ -475,0 +650,19 @@
 +-- OpenXR owns the current update's clock and focus state. Keep a prepared
 +-- frame for draw so the loop waits/locates once, before simulation and input.
 +-- Direct draw callers (host render probes) still get a complete frame.
@@ -228,57 +244,59 @@
 +    local ok = pcall(love.window.setVSync, 0)
 +    if ok then vrVsyncDisabled = true end
 +  end
-@@ -482,2 +657,3 @@
++end
++
+@@ -482,2 +675,3 @@
 -    vrWidth, vrHeight = pixelDimensions()
 -    vrFrame = VRRuntime.beginFrame(vrWidth, vrHeight) == true
 +    prepareVRFrame()
 +    vrWidth,vrHeight,vrFrame = vrPrepared.width,vrPrepared.height,vrPrepared.began
 +    vrPrepared = nil
-@@ -486,0 +663,5 @@
+@@ -486,0 +681,5 @@
 +  local presentation
 +  if vrFrame and VRRuntime.isBridgeActive() and VRRuntime.shouldRender() then
 +    presentation = require("src.vr.GamePresentation")
 +    presentation.beginDraw(Game)
 +  end
-@@ -497,0 +679 @@
+@@ -497,0 +697 @@
 +  if presentation then presentation.endDraw() end
-@@ -554,0 +737 @@
+@@ -554,0 +755 @@
 +  if not vrInputAllowed() then return end
-@@ -561,0 +745 @@
+@@ -561,0 +763 @@
 +  if not vrInputAllowed() then return end
-@@ -567,0 +752 @@
+@@ -567,0 +770 @@
 +  if not vrInputAllowed() then return end
-@@ -573,0 +759 @@
+@@ -573,0 +777 @@
 +  if not vrInputAllowed() then return end
-@@ -579,0 +766 @@
+@@ -579,0 +784 @@
 +  if not vrInputAllowed() then return end
-@@ -585,0 +773 @@
+@@ -585,0 +791 @@
 +  if not vrInputAllowed() then return end
-@@ -591,0 +780 @@
+@@ -591,0 +798 @@
 +  if not vrInputAllowed() then return end
-@@ -597,0 +787 @@
+@@ -597,0 +805 @@
 +  if not vrInputAllowed() then return end
-@@ -603,0 +794 @@
+@@ -603,0 +812 @@
 +  if not vrInputAllowed() then return end
-@@ -609,0 +801 @@
+@@ -609,0 +819 @@
 +  if not vrInputAllowed() then return end
-@@ -634,0 +827 @@
+@@ -634,0 +845 @@
 +  if not vrInputAllowed() then return end
-@@ -657,0 +851 @@
+@@ -657,0 +869 @@
 +  if not vrInputAllowed() then return end
-@@ -667,0 +862 @@
+@@ -667,0 +880 @@
 +  if not vrInputAllowed() then return end
-@@ -677,0 +873 @@
+@@ -677,0 +891 @@
 +  if not vrInputAllowed() then return end
-@@ -687,0 +884 @@
+@@ -687,0 +902 @@
 +  if not vrInputAllowed() then return end
-@@ -720,0 +918 @@
+@@ -720,0 +936 @@
 +  if not vrInputAllowed() then return end
-@@ -734,0 +933 @@
+@@ -734,0 +951 @@
 +  if not vrInputAllowed() then return end
-@@ -745,0 +945 @@
+@@ -745,0 +963 @@
 +  if not vrInputAllowed() then return end
-@@ -822 +1022,6 @@
+@@ -822 +1040,6 @@
 -    -- update dt
 +    if startupTrace then startupTrace.tick(VRRuntime,
 +      Importer and "importer" or Game and "game" or "other") end
@@ -286,25 +304,29 @@
 +    if VRRuntime.isEnabled() and love.graphics and love.graphics.isActive() then
 +      prepareVRFrame()
 +    end
-@@ -823,0 +1029,2 @@
+@@ -824,2 +1047,6 @@
+-
+-    -- call update and draw
 +    local xrPacedThisFrame = vrPrepared and VRRuntime.isFramePaced()
 +    if xrPacedThisFrame then dt = VRRuntime.frameDelta(dt) end
-@@ -825 +1032,3 @@
--    -- call update and draw
++
 +    -- Close a begun XR frame even if update, draw, or present raises.
 +    local frameOK, frameError = xpcall(function()
 +    if startupTrace then startupTrace.stage("update-enter", VRRuntime) end
-@@ -826,0 +1036 @@
+@@ -826,0 +1054 @@
 +    if startupTrace then startupTrace.stage("update-exit", VRRuntime) end
-@@ -830,0 +1041 @@
+@@ -830,0 +1059 @@
 +      if startupTrace then startupTrace.stage("draw-enter", VRRuntime) end
-@@ -831,0 +1043,3 @@
+@@ -831,0 +1061,3 @@
 +      if startupTrace then startupTrace.stage("draw-exit", VRRuntime) end
 +      local telemetry = package.loaded["src.vr.Telemetry"]
 +      local presentStage = telemetry and telemetry.beginStage("window_present")
-@@ -832,0 +1047 @@
+@@ -833,2 +1065,13 @@
+-    end
+-
 +      if telemetry then telemetry.endStage(presentStage) end
-@@ -834,0 +1050,10 @@
++    end
++
 +    end, debug.traceback)
 +    -- A skipped/custom draw callback may decline to consume the frame.
 +    if vrPrepared or (not frameOK and xrPacedThisFrame) then
@@ -315,10 +337,21 @@
 +      if startupTrace then startupTrace.failure(frameError, VRRuntime) end
 +      error(frameError,0)
 +    end
-@@ -836 +1061,5 @@
+@@ -836 +1079,5 @@
 -      if paced then
 +      if xrPacedThisFrame then
 +        -- xrWaitFrame already paced this frame; do not add window VSync or
 +        -- FrameCap sleep on top of the compositor clock.
 +        nextFrame = love.timer.getTime()
 +      elseif paced then
+--- a/src/import/RomImporter.lua
++++ b/src/import/RomImporter.lua
+@@ -1396 +1396 @@
+-  if self._lastMouseX and self._padCursorActive then
++  if self._lastMouseX and self._padCursorActive and not self._vrLaserCursor then
+@@ -2624,2 +2624,3 @@
+-  -- Gamepad virtual cursor (drawn last so it sits above the CRT overlay).
+-  if self._padCursorActive then
++  -- Native VR draws its approved laser above the projected panel.
++  -- Keep the original cursor and hover behavior for pad/flat input.
++  if self._padCursorActive and not self._vrLaserCursor then

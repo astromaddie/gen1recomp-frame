@@ -30,7 +30,13 @@ is projected onto a shared plane, 1.9 m wide at 2 m (tall screens fit within
 and height on mono entry or recentre, preserves the original screen aspect,
 and uses projection layers only. The legacy quadScale option applies only to
 the Windows quad fallback; Linux uses this physical screen instead of scaling
-an identical texture across both eye frusta. Native actions reuse gamepad callbacks.
+an identical texture across both eye frusta. Native buttons reuse gamepad callbacks. Launcher-only aim/float-trigger actions
+are bound for Frame, Touch and Index. Their action spaces use the eyes' reference
+space and predicted display time, require active pose/trigger and valid position
+plus orientation, and are destroyed before their pose action/session. A 0.60/0.45
+trigger latch requires release on entry or tracking/focus recovery. Laser hit
+geometry shares the renderer's anchor/aspect; original importer hover/click and
+pad navigation remain authoritative. No OS mouse coordinates are modified.
 The Frame controller extension is enabled and suggested only when advertised.
 Menu/short View/long View implement Start/Select/recentre. A/B and left stick/
 D-pad provide normal game input. No OS keyboard injection is used.
@@ -43,8 +49,16 @@ image. It follows head yaw/pitch while retaining gravity-up, so full eye roll
 does not turn identical texture coordinates into mismatched physical locations.
 Original palette zones and menu/dialogue layout stay in the source
 compositor. Its old 20%-of-eye scale is replaced by the shared physical plane.
-Staged battles use the final original desktop composition as that plane's mono
-source after the reference hook clears its pending stereo pair.
+The public standalone battle host replaces its single mono arena pass with two
+tracked arena passes, each using its own Voxel3D/AA slot and runtime FOV/IPD.
+It uses the existing authored wide/wide_uiwide rig for VR only: the source tele
+rig's 11.5-degree lens leaves cards tiny under the physical headset FOV. Arena
+cells, original card capture/art/back-sprite policy, saved options and flat mode
+stay with the source. Original battle state/UI draw and provider update/capture
+run once; only terrain and card drawing repeats. The existing visibility hooks
+consume the battle's tracked cameras without another culling implementation.
+The battle HUD remains the original transparent native UI projected per eye.
+The existing arena option defaults ON in pinned 97ca3e1f; explicit OFF is respected.
 
 Within an actual XR draw only, the adapter caches `Player:pose()` once and
 restores the original method at draw end. The pinned implementation advances
@@ -157,10 +171,12 @@ ROMs, caches and saves are excluded from every distributable kit manifest.
 The user's Mac Yellow save and backup are snapshotted and hash-checked without
 modifying their original bytes, timestamps or permissions.
 
-Known limits: staged battles retain the reference mono scene rendered on a
-physical screen; current upstream Gen 2/3 and arbitrary Mac mods are outside this pinned port.
-No new comfort/settings UI, hand interaction, haptic confirmation or full
-campaign acceptance has been established.
+Known limits: the new laser and stereo battle presentation remain headset-unverified.
+Move/Poké Ball screen-space effects retain their original UI-plane behavior;
+complete combat-effect correspondence, all arena placements and worn HUD
+readability have not been accepted. Current upstream Gen 2/3 and arbitrary Mac
+mods are outside this pinned port. No new comfort/settings UI, haptic confirmation
+or full campaign acceptance has been established.
 
 The corrected `0e9b122` world capture reported a 27.78 ms runtime period, but
 capture/readback was enabled and no clean timing interval completed. This is
@@ -484,3 +500,31 @@ on success or error. No simulation/mesh pump runs between those eyes. Per-eye
 facing, figure/billboard matrices, shadow fitting, companion callbacks, LOD inputs
 and graphics submission still execute independently. Flat rendering never opens
 this scope; every later frame rebuilds its preparation from current state.
+
+
+## Launcher laser and stereo battle host checks
+
+The native pointer test compiles the production bridge translation unit and
+checks unique action/localized names, Frame/Touch/Index aim/trigger bindings,
+current predicted-time location, both pose-valid flags, focus/render gates and
+space-before-action cleanup. Lua tests cover shared panel geometry at center and
+corners with yaw/roll/asymmetric FOV, tall sources, both hands, off/behind-plane
+rays, hysteresis/release rearming, and original Yellow Play routing. The actual
+importer updater retains laser hover during OS mouse movement, yields to the
+left stick, receives right-stick scrolling, and the original game Input ignores
+launcher trigger/pose fields. The render harness draws the original importer
+UI/assets and checks that the full procedural dot is above its source in both eyes.
+
+The private Yellow/Pewter host run uses the real standalone host, terrain,
+original Pidgey/Nidoran cards, and Fight/move-select/B controls. At 1728-square
+native eye targets, the authored wide rig produced approximately 113x135-pixel
+Pidgey and 214x235-pixel Nidoran opaque-card bounds. It executes two arena/card
+passes and no provider update/capture during either eye pass. Runtime IPD stays
+0.064 m (3.072 world pixels). Existing terrain selection retained 1,830,348 of
+14,914,080 source indices for the menu pair, with pixel-exact full-eye comparison
+to uncull; yaw/roll plus 0.08 m translation also matched exactly. These are
+software-GL host geometry/render results, not Frame performance measurements.
+The original battle-return fade completes, overworld stereo resumes with preserved
+physical IPD, and a second encounter creates and clears a fresh provider session.
+Private evidence is in work/pointer-battle-qa beside the checkout; no game art
+or player data is distributed in the kit.

@@ -407,6 +407,10 @@ public:
             !loadInstance(m_attachSessionActionSets, "xrAttachSessionActionSets") ||
             !loadInstance(m_syncActions, "xrSyncActions") ||
             !loadInstance(m_getActionStateBoolean, "xrGetActionStateBoolean") ||
+            !loadInstance(m_getActionStateFloat, "xrGetActionStateFloat") ||
+            !loadInstance(m_getActionStatePose, "xrGetActionStatePose") ||
+            !loadInstance(m_createActionSpace, "xrCreateActionSpace") ||
+            !loadInstance(m_locateSpace, "xrLocateSpace") ||
             !loadInstance(m_getActionStateVector2f, "xrGetActionStateVector2f") ||
             !loadInstance(m_beginSession, "xrBeginSession") ||
             !loadInstance(m_endSession, "xrEndSession") ||
@@ -473,7 +477,7 @@ public:
         if (!validateOpenGlVersion()) return false;
 
         if (!selectViewConfiguration() || !selectBlendMode() || !createSession() ||
-            !createActions() || !createReferenceSpace() || !createSwapchains()) {
+            !createActions() || !createReferenceSpace() || !createAimSpaces() || !createSwapchains()) {
             return false;
         }
 
@@ -1082,6 +1086,9 @@ public:
     XrDuration predictedDisplayPeriod() const { return m_frameState.predictedDisplayPeriod; }
     float moveX() const { return m_moveX; }
     float moveY() const { return m_moveY; }
+    const XrSpaceLocation& aim(size_t hand) const { return m_aimLocations[hand]; }
+    float trigger(size_t hand) const { return m_triggers[hand]; }
+    float scrollY() const { return m_scrollY; }
     bool actionA() const { return m_actionA; }
     bool actionB() const { return m_actionB; }
     bool actionStart() const { return m_actionStart; }
@@ -1775,6 +1782,9 @@ private:
         }
 
         if (!createAction(&m_moveAction, "move", "Move", XR_ACTION_TYPE_VECTOR2F_INPUT) ||
+            !createAction(&m_aimAction, "launcher_aim", "Launcher aim", XR_ACTION_TYPE_POSE_INPUT) ||
+            !createAction(&m_triggerAction, "launcher_trigger", "Launcher trigger", XR_ACTION_TYPE_FLOAT_INPUT) ||
+            !createAction(&m_scrollAction, "launcher_scroll", "Launcher scroll", XR_ACTION_TYPE_VECTOR2F_INPUT) ||
             !createAction(&m_actionAHandle, "a", "A", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
             !createAction(&m_actionBHandle, "b", "B", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
             !createAction(&m_startAction, "start", "Start", XR_ACTION_TYPE_BOOLEAN_INPUT) ||
@@ -1794,6 +1804,11 @@ private:
         // fallbacks. Steam Frame has a dedicated profile below when its
         // extension is advertised.
         (void)suggestBindings("/interaction_profiles/oculus/touch_controller", {
+            {m_aimAction, "/user/hand/left/input/aim/pose"},
+            {m_aimAction, "/user/hand/right/input/aim/pose"},
+            {m_triggerAction, "/user/hand/left/input/trigger/value"},
+            {m_triggerAction, "/user/hand/right/input/trigger/value"},
+            {m_scrollAction, "/user/hand/right/input/thumbstick"},
             {m_moveAction, "/user/hand/left/input/thumbstick"},
             {m_actionAHandle, "/user/hand/right/input/a/click"},
             {m_actionBHandle, "/user/hand/right/input/b/click"},
@@ -1802,6 +1817,11 @@ private:
             {m_recenterAction, "/user/hand/left/input/thumbstick/click"},
         });
         (void)suggestBindings("/interaction_profiles/valve/index_controller", {
+            {m_aimAction, "/user/hand/left/input/aim/pose"},
+            {m_aimAction, "/user/hand/right/input/aim/pose"},
+            {m_triggerAction, "/user/hand/left/input/trigger/value"},
+            {m_triggerAction, "/user/hand/right/input/trigger/value"},
+            {m_scrollAction, "/user/hand/right/input/thumbstick"},
             {m_moveAction, "/user/hand/left/input/thumbstick"},
             {m_actionAHandle, "/user/hand/right/input/a/click"},
             {m_actionBHandle, "/user/hand/right/input/b/click"},
@@ -1835,6 +1855,11 @@ private:
         if (m_frameControllerExtensionAvailable) {
             m_frameControllerBindingsSuggested = suggestBindings(
                 kFrameControllerProfilePath, {
+            {m_aimAction, "/user/hand/left/input/aim/pose"},
+            {m_aimAction, "/user/hand/right/input/aim/pose"},
+            {m_triggerAction, "/user/hand/left/input/trigger/value"},
+            {m_triggerAction, "/user/hand/right/input/trigger/value"},
+            {m_scrollAction, "/user/hand/right/input/thumbstick"},
                     {m_moveAction, "/user/hand/left/input/thumbstick"},
                     {m_dpadUpAction, "/user/hand/left/input/dpad_up/click"},
                     {m_dpadDownAction, "/user/hand/left/input/dpad_down/click"},
@@ -1860,14 +1885,34 @@ private:
         return true;
     }
 
+    bool createAimSpaces() {
+        if (!m_actionsSupported) return true;
+        for (size_t i = 0; i < m_handPaths.size(); ++i) {
+            XrActionSpaceCreateInfo info{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+            info.action = m_aimAction;
+            info.subactionPath = m_handPaths[i];
+            info.poseInActionSpace.orientation.w = 1;
+            const XrResult result = m_createActionSpace(m_session, &info, &m_aimSpaces[i]);
+            if (XR_FAILED(result)) return failResult("xrCreateActionSpace", result);
+        }
+        return true;
+    }
+
     void cleanupActions() {
+        // Action spaces depend on both the pose action and the session.
+        for (auto& space : m_aimSpaces) {
+            if (space && m_destroySpace) (void)m_destroySpace(space);
+            space = XR_NULL_HANDLE;
+        }
+        m_aimLocations = {};
+        m_triggers = {};
         if (m_destroyAction) {
             for (XrAction* action : {&m_moveAction, &m_actionAHandle,
                                      &m_actionBHandle, &m_startAction,
                                      &m_selectAction, &m_recenterAction,
                                      &m_frameViewAction, &m_dpadUpAction,
                                      &m_dpadDownAction, &m_dpadLeftAction,
-                                     &m_dpadRightAction}) {
+                                     &m_dpadRightAction, &m_aimAction, &m_triggerAction, &m_scrollAction}) {
                 if (*action != XR_NULL_HANDLE) {
                     (void)m_destroyAction(*action);
                     *action = XR_NULL_HANDLE;
@@ -1883,6 +1928,9 @@ private:
     }
 
     bool syncActions() {
+        m_aimLocations = {};
+        m_triggers = {};
+        m_scrollY = 0;
         m_moveX = 0.0f;
         m_moveY = 0.0f;
         m_actionA = false;
@@ -1910,6 +1958,34 @@ private:
         for (XrPath hand : m_handPaths) {
             XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
             getInfo.subactionPath = hand;
+            // Locate aim with the same display time/reference space as this
+            // frame's eyes. Never expose stale or partially valid tracking.
+            const size_t index = hand == m_handPaths[0] ? 0 : 1;
+            if (m_frameActive && shouldRender() && m_aimSpaces[index]) {
+                XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
+                getInfo.action = m_aimAction;
+                XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+                const auto flags = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                                   XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+                if (m_getActionStatePose(m_session, &getInfo, &pose) == XR_SUCCESS &&
+                    pose.isActive && m_locateSpace(m_aimSpaces[index], m_referenceSpace,
+                        m_frameState.predictedDisplayTime, &location) == XR_SUCCESS &&
+                    (location.locationFlags & flags) == flags) {
+                    XrActionStateFloat trigger{XR_TYPE_ACTION_STATE_FLOAT};
+                    getInfo.action = m_triggerAction;
+                    if (m_getActionStateFloat(m_session, &getInfo, &trigger) == XR_SUCCESS &&
+                        trigger.isActive) {
+                        m_aimLocations[index] = location;
+                        m_triggers[index] = trigger.currentState;
+                    }
+                }
+            }
+            if (index == 1) {
+                XrActionStateVector2f scroll{XR_TYPE_ACTION_STATE_VECTOR2F};
+                getInfo.action = m_scrollAction;
+                if (m_getActionStateVector2f(m_session, &getInfo, &scroll) == XR_SUCCESS &&
+                    scroll.isActive) m_scrollY = scroll.currentState.y;
+            }
 
             XrActionStateVector2f moveState{XR_TYPE_ACTION_STATE_VECTOR2F};
             getInfo.action = m_moveAction;
@@ -3072,6 +3148,7 @@ private:
 
 #if defined(XRBRIDGE_TESTING)
     friend struct FoveationTest;
+    friend struct PointerTest;
 #endif
     bool m_foveationAvailable = false;
     bool m_eyeFoveationAvailable = false;
@@ -3184,6 +3261,10 @@ private:
     PFN_xrAttachSessionActionSets m_attachSessionActionSets = nullptr;
     PFN_xrSyncActions m_syncActions = nullptr;
     PFN_xrGetActionStateBoolean m_getActionStateBoolean = nullptr;
+    PFN_xrGetActionStateFloat m_getActionStateFloat = nullptr;
+    PFN_xrGetActionStatePose m_getActionStatePose = nullptr;
+    PFN_xrCreateActionSpace m_createActionSpace = nullptr;
+    PFN_xrLocateSpace m_locateSpace = nullptr;
     PFN_xrGetActionStateVector2f m_getActionStateVector2f = nullptr;
     PFN_xrBeginSession m_beginSession = nullptr;
     PFN_xrEndSession m_endSession = nullptr;
@@ -3208,6 +3289,13 @@ private:
     XrSpace m_referenceSpace = XR_NULL_HANDLE;
     XrActionSet m_actionSet = XR_NULL_HANDLE;
     XrAction m_moveAction = XR_NULL_HANDLE;
+    XrAction m_aimAction = XR_NULL_HANDLE;
+    XrAction m_triggerAction = XR_NULL_HANDLE;
+    XrAction m_scrollAction = XR_NULL_HANDLE;
+    std::array<XrSpace, 2> m_aimSpaces{};
+    std::array<XrSpaceLocation, 2> m_aimLocations{};
+    std::array<float, 2> m_triggers{};
+    float m_scrollY = 0;
     XrAction m_actionAHandle = XR_NULL_HANDLE;
     XrAction m_actionBHandle = XR_NULL_HANDLE;
     XrAction m_startAction = XR_NULL_HANDLE;
@@ -3812,6 +3900,27 @@ static int l_pushStatus(lua_State* L) {
         setNumberField(L, -1, "x", g_bridge.moveX());
         setNumberField(L, -1, "y", g_bridge.moveY());
         lua_setfield(L, -2, "move");
+        setNumberField(L, -1, "scrollY", g_bridge.scrollY());
+        lua_newtable(L);
+        for (size_t i = 0; i < 2; ++i) {
+            const auto& aim = g_bridge.aim(i);
+            lua_newtable(L);
+            setBoolField(L, -1, "valid", aim.locationFlags != 0);
+            setNumberField(L, -1, "trigger", g_bridge.trigger(i));
+            lua_newtable(L);
+            setNumberField(L, -1, "x", aim.pose.position.x);
+            setNumberField(L, -1, "y", aim.pose.position.y);
+            setNumberField(L, -1, "z", aim.pose.position.z);
+            lua_setfield(L, -2, "position");
+            lua_newtable(L);
+            setNumberField(L, -1, "x", aim.pose.orientation.x);
+            setNumberField(L, -1, "y", aim.pose.orientation.y);
+            setNumberField(L, -1, "z", aim.pose.orientation.z);
+            setNumberField(L, -1, "w", aim.pose.orientation.w);
+            lua_setfield(L, -2, "orientation");
+            lua_setfield(L, -2, i == 0 ? "left" : "right");
+        }
+        lua_setfield(L, -2, "hands");
         setBoolField(L, -1, "a", g_bridge.actionA());
         setBoolField(L, -1, "b", g_bridge.actionB());
         setBoolField(L, -1, "start", g_bridge.actionStart());

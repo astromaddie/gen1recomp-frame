@@ -286,3 +286,30 @@ can fault ARM64 LuaJIT when combined with scene-module swapping. Use the product
 exclusive stages for selector timing and keep host software-GL cost separate from
 Frame measurements. Source/header kernel hashes are included in native build and
 package receipts.
+
+
+## Launcher pointer and battle stereo regressions
+
+`launcher_pointer_test.lua integration/src/vr` exercises physical ray geometry
+and click latching. `launcher_transition_test.lua` requires a fresh assembly:
+it now runs the original trigger-to-Play callback, original importer cursor/scroll
+update, and original gameplay input isolation in addition to A/pad/mouse paths.
+Run `battle_stereo_test.lua integration/src/vr <assembled-mod>` for the actual
+standalone host's two-eye-only dispatch, once-only UI/update/capture, error cleanup
+and session reset. Build `native_pointer.cpp` with the same translation-unit
+command as `native_foveation.cpp` above to test native bindings/pose lifecycle.
+
+Run `love integration/tests/launcher_pointer` under Xvfb with POKEPORT_TEST_KIT
+and POKEPORT_TEST_OUTPUT. For the actual importer render, copy that test's main.lua
+and conf.lua into a disposable private assembled game, set POKEPORT_TEST_ENGINE=1,
+and run that copy: it needs the original source/assets at the LÖVE source root.
+No player cache or ROM is required for the importer image.
+
+`battle_scene_driver.lua` uses the established isolated copied-Yellow-save host
+workflow. Set POKEPORT_TEST_BRIDGE to a native module for the existing visibility
+kernel, POKEPORT_DRIVER to this driver, GEN1_FRAME_DRIVER_UTIL to driver_util.lua,
+and SHOT_DIR to a private evidence directory. It renders at 1728², compares full
+images under equal poses with visibility selection off/on, records actual card
+bounds/IPD/pass counts, exercises original Fight/B actions and battle exit/re-entry.
+The synthetic pose changes before the following XR frame is prepared; do not
+compare two draws across a pose change inside one update.

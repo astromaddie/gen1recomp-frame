@@ -151,3 +151,34 @@
 +  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_scene_setup") end
 @@ -1115,0 +1166 @@
 +  if VoxelScene.performanceMark then VoxelScene.performanceMark("mod_draw_traversal") end
+--- a/lib/VoxelBattleStandalone.lua
++++ b/lib/VoxelBattleStandalone.lua
+@@ -148,0 +149,5 @@
++  local vr = require("src.vr.BattleStereo")
++  if vr.active() then
++    local surface = vr.render(V, session, drawActors)
++    return surface and presentWorld(session, surface) or false
++  end
+--- a/lib/VoxelBattleScene.lua
++++ b/lib/VoxelBattleScene.lua
+@@ -165,0 +166,4 @@
++  local slot = "battle"
++  if hostCamera and hostCamera.nativeXR then
++    pw, ph, slot = hostCamera.width, hostCamera.height, hostCamera.slot
++  end
+@@ -169 +173,3 @@
+-  camera = windowCamera(camera, ph, presentationScale(arena))
++  if not (hostCamera and hostCamera.nativeXR) then
++    camera = windowCamera(camera, ph, presentationScale(arena))
++  end
+@@ -182,0 +189 @@
++  local previousCamera = Voxel3D.camera
+@@ -185 +192 @@
+-    if not Voxel3D.beginScene(rw, rh, cx, cy, vw, vh, sky, "battle") then
++    if not Voxel3D.beginScene(rw, rh, cx, cy, vw, vh, sky, slot) then
+@@ -221 +228 @@
+-    return AntiAlias.resolve(Voxel3D.endScene(), pw, ph, "battle")
++    return AntiAlias.resolve(Voxel3D.endScene(), pw, ph, slot)
+@@ -223 +230 @@
+-  Voxel3D.camera = nil
++  Voxel3D.camera = previousCamera

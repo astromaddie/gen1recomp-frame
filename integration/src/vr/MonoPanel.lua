@@ -1,7 +1,7 @@
 -- Existing flat screens on a shared physical plane, rendered into the normal
 -- eye projection layer. No compositor quad and no desktop-aspect stretch.
 local Panel = {}
-local anchor, shader, mesh
+local anchor, shader, mesh, pointer
 local targets = {}
 local DISTANCE, WIDTH = 2, 1.9
 
@@ -13,7 +13,8 @@ local function rotate(q, x, y, z)
     z + q.w * tz + q.x * ty - q.y * tx
 end
 
-function Panel.reset() anchor = nil end
+function Panel.reset() anchor = nil; pointer = nil end
+function Panel.setPointer(value) pointer = value end
 
 function Panel.placement(views, followPitch)
   local first, second = views[1], views[2]
@@ -29,6 +30,63 @@ function Panel.placement(views, followPitch)
     rx = rx, rz = rz,
     ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy,
   }
+end
+
+function Panel.geometry(views, sw, sh)
+  if not anchor then anchor = Panel.placement(views, false) end
+  local width = math.min(WIDTH, WIDTH * sw / sh)
+  return anchor, width, width * sh / sw
+end
+
+function Panel.hit(views, sw, sh, aim)
+  if not aim or not aim.valid then return nil end
+  local a, width, height = Panel.geometry(views, sw, sh)
+  local dx, dy, dz = rotate(aim.orientation, 0, 0, -1)
+  local p = aim.position
+  local nx, nz = a.rz, -a.rx
+  local denominator = dx * nx + dz * nz
+  if denominator <= 1e-6 then return nil end
+  local t = ((a.x-p.x)*nx + (a.z-p.z)*nz) / denominator
+  if t <= 0 then return nil end
+  local x,y,z = p.x+dx*t, p.y+dy*t, p.z+dz*t
+  local u = ((x-a.x)*a.rx+(z-a.z)*a.rz)/width + 0.5
+  local v = 0.5-(y-a.y)/height
+  local inside = u >= -1e-9 and u <= 1+1e-9 and v >= -1e-9 and v <= 1+1e-9
+  return {origin=p, point={x=x,y=y,z=z}, inside=inside,u=u,v=v,
+    x=math.max(0,math.min(sw,u*sw)), y=math.max(0,math.min(sh,v*sh))}
+end
+
+function Panel.project(view, point)
+  local q,p = view.orientation,view.position
+  local x,y,z = rotate({x=-q.x,y=-q.y,z=-q.z,w=q.w},
+    point.x-p.x,point.y-p.y,point.z-p.z)
+  local f=view.fov
+  local l,r,u,d=math.tan(f.left),math.tan(f.right),math.tan(f.up),math.tan(f.down)
+  return ((x/-z-l)/(r-l))*view.width, ((u-y/-z)/(u-d))*view.height, -z
+end
+
+local function drawPointer(view)
+  if not pointer then return end
+  local a,b=pointer.origin,pointer.point
+  local ax,ay,az=Panel.project(view,a)
+  local bx,by,bz=Panel.project(view,b)
+  if bz <= 0.01 then return end
+  if az < 0.01 then
+    local t=(0.01-az)/(bz-az)
+    ax,ay=Panel.project(view,{x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t})
+  end
+  love.graphics.setShader()
+  love.graphics.setBlendMode("alpha")
+  love.graphics.setColor(0.15,0.9,1,0.9)
+  love.graphics.setLineWidth(1.5)
+  love.graphics.line(ax,ay,bx,by)
+  if pointer.inside then
+    -- Entire dot is drawn after the source quad, including at panel edges.
+    love.graphics.setColor(1,1,1,1)
+    love.graphics.circle("fill",bx,by,4.5)
+    love.graphics.setColor(0.15,0.9,1,1)
+    love.graphics.circle("fill",bx,by,3)
+  end
 end
 
 -- Exposed geometry is also used by the GPU path. Homogeneous positions retain
@@ -77,6 +135,7 @@ local function draw(source, view, target, placement, overlay)
   local ok, err = pcall(function()
     love.graphics.origin()
     love.graphics.setScissor()
+    love.graphics.setStencilTest()
     love.graphics.setColorMask(true, true, true, true)
     love.graphics.setDepthMode()
     love.graphics.setMeshCullMode("none")
@@ -88,6 +147,7 @@ local function draw(source, view, target, placement, overlay)
     if not overlay then love.graphics.clear(0, 0, 0, 1) end
     mesh:setVertices(Panel.vertices(view, placement, width, height))
     love.graphics.draw(mesh)
+    if not overlay then drawPointer(view) end
   end)
   love.graphics.pop()
   if not ok then error(err, 0) end
