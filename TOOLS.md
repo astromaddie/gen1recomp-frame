@@ -1,8 +1,32 @@
 # Native Steam Frame kit tools
 
 These tools build the ARM64 LÖVE 11.5 runtime and package only the native port
-kit. The private game assembly is a separate player-local operation and is
-never part of `package.py` output.
+kit. The locally assembled game tree is a separate player-side operation and
+is never part of `package.py` output.
+
+Run the build host steps in Bash with Git, Python 3, `patch`, Docker Buildx, and
+an ARM64-capable Docker builder. On Windows, use Docker Desktop's WSL2
+integration, install a Linux distribution using Microsoft's [WSL installation guide](https://learn.microsoft.com/windows/wsl/install), keep the checkout in that distribution's filesystem, and run the commands in its Linux shell. Docker documents [WSL2 integration](https://docs.docker.com/desktop/features/wsl/use-wsl/)
+and [ARM64 builds with emulation](https://docs.docker.com/build/building/multi-platform/).
+On x86-64 hosts, the builder must provide ARM64 emulation; check with
+`docker buildx inspect --bootstrap`. QEMU builds can be much slower than native
+builds. These commands produce the standalone Linux ARM64 Frame kit, not a
+Windows or desktop VR application. The commands below also support a native
+Frame Desktop build if Docker Buildx is already available in a writable
+home-directory checkout: the Frame host is ARM64, so `--platform linux/arm64`
+uses the native architecture without emulation. The kit scripts do not set up
+Docker or add packages to SteamOS; if Docker is unavailable, use an external
+host.
+
+Start from a fresh checkout on the build host:
+
+```sh
+git clone --branch main https://github.com/astromaddie/gen1recomp-frame.git
+cd gen1recomp-frame
+export GEN1_KIT_ROOT="$PWD"
+export GEN1_WORK_DIR="$HOME/Gen1FrameBuild"
+mkdir -p "$GEN1_WORK_DIR"
+```
 
 ## Build runtime
 
@@ -10,9 +34,14 @@ The checked-in Dockerfile uses Ubuntu 22.04 and the input archives pinned by
 `sources/SHA256SUMS`.
 
 ```sh
-python3 tools/fetch-runtime-sources.py sources
-docker buildx build --platform linux/arm64 -f tools/Dockerfile -t gen1recomp-frame-builder:latest .
-tools/build-runtime.sh gen1recomp-frame-builder:latest /path/to/runtime-export
+python3 "$GEN1_KIT_ROOT/tools/fetch-runtime-sources.py" "$GEN1_WORK_DIR/runtime-sources"
+mkdir -p "$GEN1_WORK_DIR/runtime-build-context/tools" "$GEN1_WORK_DIR/runtime-build-context/sources"
+cp -a "$GEN1_WORK_DIR/runtime-sources/." "$GEN1_WORK_DIR/runtime-build-context/sources/"
+cp "$GEN1_KIT_ROOT/tools/Dockerfile" "$GEN1_WORK_DIR/runtime-build-context/tools/Dockerfile"
+docker buildx build --platform linux/arm64 --load \
+  -f "$GEN1_WORK_DIR/runtime-build-context/tools/Dockerfile" \
+  -t gen1recomp-frame-builder:latest "$GEN1_WORK_DIR/runtime-build-context"
+"$GEN1_KIT_ROOT/tools/build-runtime.sh" gen1recomp-frame-builder:latest "$GEN1_WORK_DIR/runtime-export"
 ```
 
 The export copies LÖVE and its non-platform transitive libraries, preserves
@@ -22,23 +51,26 @@ SteamOS supplies its own loader, glibc, C++ runtime, graphics stack, and audio
 system dependencies. The launcher puts the package libraries first in
 `LD_LIBRARY_PATH`.
 
-## Private local assembly
+## Local gameplay assembly from public pinned sources
 
-Fetch only the exact pinned engine and voxel source revisions into a fresh
-external directory, then assemble into another fresh external directory:
+The game tree is assembled locally from public, pinned engine and voxel source
+revisions; no private account or source access is required. The helper keeps
+its historical `fetch-private-sources.py` filename. Fetch the sources and
+assemble into fresh directories under the task work folder:
 
 ```sh
-python3 tools/fetch-private-sources.py /path/to/private-sources
-python3 tools/assemble-local.py \
-  --engine /path/to/private-sources/gen1recomp \
-  --voxel /path/to/private-sources/DRAMALESS_SHAPE \
-  --kit /path/to/gen1recomp-frame \
-  --output /path/to/private-local-assembly
+python3 "$GEN1_KIT_ROOT/tools/fetch-private-sources.py" "$GEN1_WORK_DIR/upstream-sources"
+python3 "$GEN1_KIT_ROOT/tools/assemble-local.py" \
+  --engine "$GEN1_WORK_DIR/upstream-sources/gen1recomp" \
+  --voxel "$GEN1_WORK_DIR/upstream-sources/DRAMALESS_SHAPE" \
+  --kit "$GEN1_KIT_ROOT" \
+  --output "$GEN1_WORK_DIR/local-assembly"
 ```
 
 The assembly checks both revisions and clean checkouts, applies the native
-`integration/main.lua.patch`, `integration/dramaless.patch`, plus `integration/src`, and writes a file hash
-manifest. Keep it outside both this tools tree and the distributable package.
+`integration/main.lua.patch`, `integration/dramaless.patch`, plus
+`integration/src`, and writes a file hash manifest. Keep it outside both this
+tools tree and the distributable package.
 The game already supports player-provided ROM import through its file picker or
 `POKEPORT_IMPORT_ROM=/absolute/path/to/legally-obtained-rom`; the variable is
 consumed by the import path and does not copy the ROM into the kit. Never put
@@ -78,18 +110,18 @@ path. Its build receipt binds the binary and dependency log to the builder image
 Keep the build output outside the source tree:
 
 ```sh
-tools/build-bridge.sh gen1recomp-frame-builder:latest \
-  /path/to/gen1recomp-frame /path/to/runtime-export /path/to/bridge-output/xrbridge.so
+"$GEN1_KIT_ROOT/tools/build-bridge.sh" gen1recomp-frame-builder:latest \
+  "$GEN1_KIT_ROOT" "$GEN1_WORK_DIR/runtime-export" "$GEN1_WORK_DIR/bridge/xrbridge.so"
 ```
 
 Then package a fresh output directory outside the source tree:
 
 ```sh
-python3 tools/package.py \
-  --source /path/to/gen1recomp-frame \
-  --runtime /path/to/runtime-export \
-  --xrbridge /path/to/xrbridge.so \
-  --output /path/to/native-kit-release
+python3 "$GEN1_KIT_ROOT/tools/package.py" \
+  --source "$GEN1_KIT_ROOT" \
+  --runtime "$GEN1_WORK_DIR/runtime-export" \
+  --xrbridge "$GEN1_WORK_DIR/bridge/xrbridge.so" \
+  --output "$GEN1_WORK_DIR/native-kit-release"
 ```
 
 The packager requires the adjacent `xrbridge.build.json` and dependency-closure receipt generated by `build-bridge.sh`. It includes the native CMake/C++ sources and build helper, but downloaded runtime tarballs remain build inputs and only their checksum manifest ships. Packaging refuses dirty source by default. If the source is intentionally
@@ -99,6 +131,38 @@ fixed path allowlist, requires the complete runtime license inventory, writes
 `PACKAGE-METADATA.json` and a package-wide `SHA256SUMS`, and rejects user game
 data. It does not copy `game/`, fetched voxel source, tests, build caches, or
 arbitrary files from the source checkout.
+
+## First install and Steam launch
+
+The kit package deliberately has no game tree or ROM. After assembling the
+player-local game and building the kit, create one install folder containing
+both pieces. This must be outside the source checkout:
+
+```sh
+mkdir -p "$GEN1_WORK_DIR/frame-install"
+cp -a "$GEN1_WORK_DIR/native-kit-release/." "$GEN1_WORK_DIR/frame-install/"
+mkdir -p "$GEN1_WORK_DIR/frame-install/game"
+cp -a "$GEN1_WORK_DIR/local-assembly/game/." "$GEN1_WORK_DIR/frame-install/game/"
+```
+
+For a first install from another computer, follow Valve's [Steam Frame
+development setup](https://partner.steamgames.com/doc/steamhardware/steamframe/setup)
+to enable Developer Mode and pair the host. In SteamOS Devkit Client, upload
+`frame-install/`. Set **Name** to `Gen1RecompFrame`, **Local Folder** to that
+combined directory, **Start Command** to `tools/LAUNCH-STEAM-FRAME.sh`, and
+**Runtime** to **Steam Linux Runtime 3.0 ARM64 (Sniper)**. Valve's [upload
+guide](https://partner.steamgames.com/doc/steamhardware/steamframe/loadgames)
+describes those fields. The upload creates the Steam library entry. Launch it
+there so SteamVR supplies the OpenXR and controller runtime.
+
+For a local Frame Desktop install, copy the complete `frame-install/` folder
+to a writable location under your home directory, then add
+`tools/LAUNCH-STEAM-FRAME.sh` through Steam's **Add a Non-Steam Game** flow
+and start it from the Steam library. Do not try to launch the bridge or game
+directly. On first launch, use the game's file picker to import your own
+supported 1 MiB `.gb` or `.gbc` Red, Blue, or Yellow image. No single ROM hash
+is pinned by this multi-game kit; the ROM, generated cache, and saves remain
+player-local and are excluded from the kit package.
 
 ## Presentation regressions
 
@@ -138,7 +202,7 @@ For the rendered mono regression, set `POKEPORT_TEST_KIT` to this checkout,
 `panel-right.png` and the normalized `xr-left.ppm`/`xr-right.ppm`. Different
 pixel offsets and scale in asymmetric eye images are expected: the test
 checks that both projections reconstruct the same upright physical plane.
-These host checks do not substitute for corrected Frame/wearer acceptance.
+These host checks do not substitute for on-Frame validation.
 
 Run `love integration/tests/hud_projection` under the same LÖVE/Xvfb runtime
 with `POKEPORT_TEST_KIT`, `POKEPORT_TEST_ENGINE`, `POKEPORT_TEST_VOXEL`,
@@ -255,7 +319,7 @@ second-eye refresh/query, invalid gaze, raw focus/render gates and authorized
 unattended refresh. It also verifies fixed/off/missing-optional-API fallback. Run
 `vrbridge/tests/telemetry_test.cpp` for bounded nested source/shadow GPU timestamps.
 The opt-in source-eye dimensions and AA attribution cannot prove Valve FDM attachment;
-that requires the booked Frame capture/diagnostics and worn validation separately.
+that requires the booked Frame capture and diagnostics separately.
 
 Renderer CPU diagnosis: run `luajit integration/tests/renderer_motion_driver_test.lua
 integration/tests/renderer_motion_driver.lua` and the existing telemetry/runtime
