@@ -1,140 +1,45 @@
-# Gen1Recomp for Steam Frame
+# Gen1Recomp for Steam Frame — experimental technical preview
 
-Native ARM64 Linux / OpenXR port kit for Pokémon Red, Blue and Yellow. It adapts
-the pinned MIT engine and public DRAMALESS_SHAPE 2.0.4 renderer to standalone Steam Frame, using a
-pinned LÖVE 11.5 runtime and SteamLinuxRuntime_4-arm64. No PC streaming is needed.
+Gen1Recomp Frame is a native ARM64 Linux/OpenXR port kit for Pokémon Red, Blue, and Yellow, using SteamLinuxRuntime_4-arm64. It adapts the pinned MIT Polymatic engine and public DRAMALESS_SHAPE renderer to the Steam Frame. It does not stream from a PC.
 
-The overworld uses an original host adapter around DRAMALESS's renderer, with tracked stereo cameras. Launcher, menus,
-dialogue and battles keep the reference UI. Flat fallback screens are rendered
-onto a shared 1.9 m screen at 2 m through each eye's projection, preserving
-aspect ratio and binocular alignment. This port preserves the existing camera
-and settings interfaces.
-The existing dialogue and menu artwork is collected into a transparent
-surface and projected per eye over the world. Staged battles render the public
-mod's arena and original Pokémon sprite cards through two head-tracked cameras,
-with the original battle UI on a one-metre HUD plane at its existing angular
-size. Battles use 24 world pixels per metre (twice the overworld's physical
-scale) so nearby arena geometry sits behind that UI. Runtime eye separation and
-head movement use the same metric conversion. Original closing masks and palette
-fades cover both eyes with their source timing. VR uses the mod's authored
-wide battle rig because its telephoto lens is unsuitable for the headset FOV;
-flat presentation and saved battle options remain unchanged.
-Physical controller behavior, comfort, sustained performance and sleep/resume
-still require device and worn acceptance.
+This port is private and experimental. It uses the Red/Blue/Yellow source fork; it is not the current upstream Gen 2/3 engine. Its engine base is [Polymatic Gen1Recomp](https://github.com/polymathiclabs/gen1recomp), and its renderer source is [DRAMALESS_SHAPE](https://github.com/artyrambles/DRAMALESS_SHAPE). Send generally applicable engine or renderer changes to those upstream projects; Frame-port integration changes belong in this private repository and need owner access for review.
 
-## Sources and distribution
+## Capability evidence
 
-The engine/bridge base is the MIT-licensed
-[Polymatic engine revision](https://github.com/polymathiclabs/gen1recomp/tree/1d2c421ff47f487d836589d38c6209b031bbce91).
-The player-local voxel source is
-[DRAMALESS_SHAPE revision](https://github.com/artyrambles/DRAMALESS_SHAPE/tree/97ca3e1f8f7c3aa0b3e671db497076150f494051).
-This is a Red/Blue/Yellow port of that fork, rather than the current upstream
-Gen 2/3 engine. The newer upstream launcher has separate proprietary terms.
-DRAMALESS is MIT-licensed. The kit fetches the pinned source into a private local
-assembly, carries its license there, and excludes the full mod from the kit archive.
+| Capability | Host | Frame on desk | Worn |
+|---|---|---|---|
+| OpenXR runtime and stereo | Historical ARM64 runtime/bridge and Canvas-copy checks are documented; PR0 did not rerun them. | ROM-free probe reached focused OpenXR and submitted projection on older source. | Current DRAMALESS source has no focused wear check. |
+| Launcher and controls | Host routing/render tests cover pointer validity, hit, click and gamepad routing. | Short prior run exercised launcher and saved-scene startup. | Actual Frame controller input and current launcher pointer behavior remain open. |
+| Overworld and HUD | Camera, UI projection and renderer checks are documented in VR_ARCHITECTURE.md. | Copied Yellow save ran briefly with 300 projection submissions and no bridge error. | Prior wearer saw upright aligned imagery after a correction, but found the HUD inaccessible; current HUD and comfort are unaccepted. |
+| Battles | Initial public arena/card presentation passed host rendering checks only. | No complete battle run is documented. | No full battle or campaign result is claimed. |
+| Performance | Host results are not Frame performance. | Earlier 1024-square diagnostic logged 40.09 submissions per second and 27.78 ms periods. | Severe jitter was still reported; current-source sustained performance is unmeasured. |
 
-No ROMs, extracted game data, or saves are included in Git or release packages.
-Your original Mac player data is independent of the Frame data directory.
-Runtime source download pins and license notices are included; see
-[LICENSES.md](LICENSES.md).
+Display refresh is not a substitute for measured application frame rate. The earlier 1024-square sample recorded about 40 submitted frames per second and severe jitter; the current source's real performance is unmeasured. See [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md) and [docs/PR0_READINESS.md](docs/PR0_READINESS.md).
 
-## Build and assemble
+## Sources, game data, and build
 
-See [TOOLS.md](TOOLS.md) for the pinned ARM64 Docker runtime build, native bridge
-build, private source fetch, assembly and package verification commands.
-The bridge is compiled against the exact LÖVE 11.5 headers and runtime shipped
-with the kit. A different system LÖVE must not be substituted for this ABI.
+The engine pin is Polymatic revision 1d2c421ff47f487d836589d38c6209b031bbce91; the public MIT DRAMALESS_SHAPE pin is 97ca3e1f8f7c3aa0b3e671db497076150f494051. License notices are listed in [LICENSES.md](LICENSES.md). To import a legally obtained supported Pokémon Red, Blue, or Yellow ROM, select a 1 MiB `.gb` or `.gbc` file in the import screen; the importer identifies the supported revision from its contents. Use the file picker, set `POKEPORT_IMPORT_ROM=/absolute/path/to/your-rom`, or, where no picker is available, place the `.gb`/`.gbc` beside the game so the importer can scan it. Yellow images are typically `.gbc`. ROMs, extracted game data, and saves are not included in Git or the kit package.
 
-Use `tools/LAUNCH-STEAM-FRAME.sh` in the assembled package. `--flat` explicitly
-disables VR; `--probe` runs the ROM-free OpenXR diagnostic. The normal launch
-requires OpenXR and reports startup failure instead of silently showing a flat
-window. Startup logs are in `~/.local/share/Gen1RecompFrame/logs/`.
+The copyable native runtime, bridge, local assembly, and package commands are documented in [TOOLS.md](TOOLS.md). They require Docker Buildx with ARM64 support, the pinned Ubuntu 22.04 image inputs, and external directories for build outputs and player-local assembly. The key commands are:
 
-Register the native shortcut through the Frame devkit with `steam_play="0"`
-and `compat_tool="SteamLinuxRuntime_4-arm64"`, then launch through Steam so the
-headset controller runtime is available. Keep the game and kit in
-`~/devkit-game/Gen1RecompFrame`, and player data outside that installation under
-`~/.local/share/Gen1RecompFrame/love/pokemon-love2d`.
+~~~sh
+python3 tools/fetch-runtime-sources.py sources
+docker buildx build --platform linux/arm64 -f tools/Dockerfile -t gen1recomp-frame-builder:latest .
+tools/build-runtime.sh gen1recomp-frame-builder:latest /path/to/runtime-export
+python3 tools/fetch-private-sources.py /path/to/private-sources
+python3 tools/assemble-local.py --engine /path/to/private-sources/gen1recomp --voxel /path/to/private-sources/DRAMALESS_SHAPE --kit /path/to/gen1recomp-frame --output /path/to/private-local-assembly
+tools/build-bridge.sh gen1recomp-frame-builder:latest /path/to/gen1recomp-frame /path/to/runtime-export /path/to/bridge-output/xrbridge.so
+python3 tools/package.py --source /path/to/gen1recomp-frame --runtime /path/to/runtime-export --xrbridge /path/to/bridge-output/xrbridge.so --output /path/to/native-kit-release
+~~~
 
-## Controls
+The package is a native port kit, not game data. On the Frame, register it as a Steam title with SteamLinuxRuntime_4-arm64 and launch through Steam for controller access. Player data remains under the separate application data directory.
 
-Either controller can aim the launcher laser; the right hand has priority when
-both are tracked. Release, then squeeze its trigger to click. The thin cyan beam
-and white-edged cyan dot use the same physical screen geometry as the launcher.
-Tracking/focus loss disarms clicks until release. Left stick / D-pad move in game
-and take over the original launcher cursor; right stick scrolls launcher lists.
-Right A confirms, B cancels in game. Right Menu is Start; short left View is
-Select; holding View for one second recentres the VR camera. In the launcher,
-A clicks a tab/button and Menu plays the selected imported game.
-These bindings have host routing/render tests; physical input acceptance remains open.
-`POKEPORT_VR_POINTER_TRACE=1` emits bounded native binding/focus and pointer
-validity/hit/click samples for diagnostics; it does not inject input.
+## Known limits and rights
 
-The existing VOXEL Options row selects elevated angles (ABOVE), 1ST (POV),
-and 3RD. DRAMALESS owns its existing free-camera controls and third-person
-collision boom; these differ from the previous private mod. It has no minimap.
-RES and R.DIST start at FULL; subsequent user changes are preserved.
-DRAMALESS currently uses RES for sky quality rather than reducing its scene
-target. Native XR eye dimensions remain the runtime recommendation.
-Fresh VR player data defaults to voxel level 35; an explicit existing voxel
-setting is preserved, including OFF.
-Custom Mac mods are not automatically carried into this pinned assembly. A
-copied save can show the game's existing mod load report before Continue.
+No source change or full runtime build was made during PR0. The current-source renderer replacement has host evidence but no focused Frame/wearer acceptance. Open items include readable HUD placement, real controller acceptance, tracking stability, battle and save behavior across a full play session, normal exit, sleep/resume, comfort, and measured sustained performance. Do not interpret the previous projection count as FPS acceptance.
 
-`POKEPORT_VR_CAMERA_SETBACK_METERS` optionally moves ABOVE and third-person
-cameras back along their existing viewing direction (0–3 m, default 0).
-POV and the overworld's 48 pixels/metre world scale remain unchanged.
-Staged battles use their separate 24 pixels/metre conversion and no extra setback.
-The wearer accepted an explicitly requested 0.75 m distance in the Pewter City
-comparison. Explicit zero preserves the original camera distance. HUD readability remains unverified.
+## PR0 changelog
 
-## Verification
-
-Historical Frame/wearer results below concern the previous renderer. DRAMALESS
-replacement acceptance is recorded separately in VR_ARCHITECTURE.md; earlier
-performance samples do not establish its performance or battle compatibility.
-
-ARM64 native builds, Runtime/main integration tests and actual GPU Canvas copy
-tests under LÖVE/Xvfb passed. The corrected native test checks OpenXR's
-bottom-left image convention, graphics-state restoration, MSAA/renderbuffer
-copying and rejection of non-Canvas userdata. The original bridge fails this
-orientation regression. Camera tests cover recenter yaw, full tracked roll and
-IPD preservation; rendered mono tests cover asymmetric eye projections and
-the existing screen aspect ratio. An isolated
-copy of the user's Yellow save passed the production Continue path and rendered
-its saved Pewter City location; the original save and backup were unchanged.
-
-The native kit has also been installed and launched through Steam on Frame.
-The ROM-free probe reached focused SteamVR/OpenXR operation, used sRGB
-1728 x 1728 eye swapchains, and logged 1,588 projection submissions without a
-submission failure. The wearer confirmed clear patterns in both eyes. The
-old source/dump pixel comparison incorrectly interpreted raw OpenGL rows as
-top-left and did not prove compositor orientation. The
-native game restored the copied Yellow save in flat mode and completed a short
-focused VR saved-scene run with 300 projection submissions and no bridge error.
-After the origin/pose correction, the wearer confirmed upright imagery and
-binocular alignment, but reported excessive closeness, an inaccessible HUD and
-very low/jittery frame rate. The HUD/battle projection passed host render tests
-and still requires wearer verification; the wearer accepted the 0.75 m setback.
-The focused 1024-square diagnostic submitted 1,203 frames in 30.0046 seconds
-(40.09 per second), with most runtime periods at 27.78 ms. The wearer still
-reported severe jitter. This is one diagnostic sample, not evidence that lowering
-resolution improves performance or that tracking is fault-free.
-Native recommended resolution remains unchanged. Performance remains unresolved;
-this is an unaccepted prototype.
-Current device evidence and remaining gates are recorded in
-[VR_ARCHITECTURE.md](VR_ARCHITECTURE.md).
-
-Foveation profile negotiation is implemented without reducing native eye
-resolution. It requests medium eye-tracked foveation where advertised, with a
-fixed-profile fallback and full-rate recovery if the GL request is rejected.
-`POKEPORT_XR_FOVEATION=off` disables the request for comparison. Whether Valve's
-underlying Vulkan injection foveates the LÖVE scene passes remains unverified;
-no frame-rate improvement is claimed. See [VR_ARCHITECTURE.md](VR_ARCHITECTURE.md)
-for the API/effectiveness distinction and device acceptance gate.
-
-Native VR conservatively skips map mesh chunks outside both tracked eye frusta.
-It preserves visible floor, rooms, objects, full shadow casters, original water
-quality, and recommended eye resolution. `POKEPORT_VR_DRAW_DISTANCE=off` is the
-developer baseline for comparable device timing. Host primitive reduction is not
-a claim of improved headset frame rate.
+- Reframed the root page as a private technical preview with exact host/unattended/worn boundaries.
+- Preserved the pre-PR0 root text in README_PRE_PR0.md.
+- Added source identity and pending acceptance evidence in docs/PR0_READINESS.md.
