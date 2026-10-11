@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "milestone": "PR0",
+  "status": "EXPERIMENTAL",
+  "publication_status": "private preparation; no release published",
+  "tested_commit": "5f824d0ca99f3592a96c59aa19908b973be6e0cf",
+  "supported_targets": [
+    "Linux ARM64 / SteamLinuxRuntime_4-arm64 / SteamVR OpenXR"
+  ],
+  "validation": {
+    "commit": "5f824d0ca99f3592a96c59aa19908b973be6e0cf",
+    "initial_fresh_clone_status": "clean",
+    "integration_tree": "456e8548d4e4565363b51f6727a9fffda6efaa01",
+    "prior_tested_baseline": {
+      "commit": "966711e",
+      "integration_tree": "456e8548d4e4565363b51f6727a9fffda6efaa01",
+      "outcome": "nine focused LuaJIT tests reported passing by coordinator-provided assignment evidence; not rerun because the complete integration tree hash is identical"
+    },
+    "pinned_image": "gen1recomp-frame-builder sha256:9d5562925b15d74f956e263434df866a225946fd81eaf3f840f266aa26eea402 linux/arm64",
+    "full_build": "NOT RUN"
+  },
+  "full_application_build": "not run for PR0",
+  "focused_headset_acceptance": "pending for a clean candidate; historical results are documented separately",
+  "sustained_worn_performance": "unmeasured on current candidate",
+  "distribution_blockers": [],
+  "license_scope": "Retained component notices apply to their stated code; they do not grant redistribution rights to commercial ROMs, extracted media, saves or proprietary libraries.",
+  "changelog": "README.md#pr0-changelog",
+  "validation_note": "Documentation-only changes; complete integration tree is identical to the tested baseline."
+}

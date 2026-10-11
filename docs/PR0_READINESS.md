@@ -2,6 +2,8 @@
 
 Visibility remains private. No kit release or publication is included in this work.
 
+The immutable PR0 test commit, supported targets and final host-check results are in [PR0_METADATA.json](PR0_METADATA.json). Full application builds and focused wearer acceptance remain pending.
+
 ## Source and test identity
 
 - Source revision: 966711ed0904a14472b86a442d9f072b802ff37a.
