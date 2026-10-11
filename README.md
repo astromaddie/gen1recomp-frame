@@ -4,6 +4,8 @@ This is a native Linux ARM64 Steam Frame port kit for Pokémon Red, Blue and Yel
 
 **EXPERIMENTAL.** This is a personal-use kit and remains a work in progress. You need your own supported Pokémon Red, Blue or Yellow ROM, which you import through the game. The kit contains no ROM, extracted game data or saves.
 
+**Want to play on Steam Frame?** Download the prebuilt ARM64 runtime and setup helper from the [v0.1.0 prerelease](https://github.com/astromaddie/gen1recomp-frame/releases/tag/v0.1.0); no compiler is needed. The helper sets up the matching public engine and renderer. You still need your own supported Pokémon Red, Blue or Yellow ROM.
+
 ## What the Frame port adds
 
 - Head-tracked stereo views for the overworld and staged battles.
