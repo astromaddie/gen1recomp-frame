@@ -1,5 +1,9 @@
 # Runtime and source license inventory
 
+The [MIT license](LICENSE) covers my original Frame kit and VR additions. The
+engine notice in `LICENSE-MIT-ENGINE` and the renderer/runtime notices remain
+in place. None of these licenses cover Pokémon ROMs, extracted assets or saves.
+
 The kit packages the engine's MIT notice in `LICENSE-MIT-ENGINE` and keeps the
 complete runtime notices in `runtime/licenses/`. That inventory includes LÖVE,
 SDL2, OpenXR, OpenAL Soft, Theora, mpg123, LuaJIT, libmodplug, Vorbis, Ogg, FreeType, libpng, zlib, and Brotli.

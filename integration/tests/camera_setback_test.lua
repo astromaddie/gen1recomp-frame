@@ -1,14 +1,34 @@
 local root,mod=assert(arg[1]),assert(arg[2])
 local mode="above"
-local Camera=assert(loadfile(mod.."/lib/CameraMode.lua"))({require=function(name)
-  if name=="VoxelState" then return {angle=math.rad(35),FOCAL=0.7} end
-  assert(name=="ModSetting")
-  return {new=function()return {get=function()return mode end}end}
-end})
-local Mat4=assert(loadfile(mod.."/lib/Mat4.lua"))()
+-- Exercise the current renderer's camera path, including the VR adapter.
+-- CameraMode belonged to the replaced renderer and is no longer shipped.
+local modules={ModSetting={new=function(_,_,values)
+  return {get=function()return values[1]end}
+end},VoxelScene={groundAt=function()return 0 end}}
+local V={}
+function V.require(name)
+  if not modules[name] then modules[name]=assert(loadfile(mod.."/lib/"..name..".lua"))(V) end
+  return modules[name]
+end
+local Mat4=V.require("Mat4")
 local Voxel=assert(loadfile(mod.."/lib/Voxel3D.lua"))({require=function(name)
-  if name=="Mat4" then return Mat4 end;return {}
+  if name=="Mat4" then return Mat4 end; return {}
 end})
+modules.Voxel3D=Voxel
+local voxel,fp=V.require("VoxelState"),V.require("FirstPerson")
+package.loaded["src.vr.Runtime"]={}
+local Stereo=assert(loadfile(root.."/DramalessStereo.lua"))()
+local Camera={view=function(state,w,h)
+  voxel.level=mode=="pov" and voxel.FP_LEVEL or mode=="third" and voxel.TP_LEVEL or voxel.FULL_LEVEL
+  voxel.angle=math.rad(35)
+  fp.blend=mode=="above" and 0 or 1
+  local camera=Stereo.baseCamera(V,{state=state,vw=w,vh=h,width=w,height=h})
+  -- The renderer uses arrays; Runtime accepts arrays and named vectors.
+  for _,key in ipairs({"eye","focus","up"})do
+    local v=camera[key];camera[key]={x=v[1],y=v[2],z=v[3]}
+  end
+  return camera
+end}
 local q={x=0,y=0,z=0,w=1}
 local function eye(x)return {position={x=x,y=0,z=0},orientation=q,
   fov={left=-0.8,right=0.8,up=0.8,down=-0.8}}end
@@ -28,7 +48,7 @@ local function runtime(value)
   R.setEnabled(true);assert(R.start());assert(R.beginFrame(800,600));return R
 end
 local function near(a,b,label)assert(math.abs(a-b)<1e-7,label)end
-local state={camera={x=50,y=50},player={cellX=5,cellY=6,facing="down"}}
+local state={camera={x=50,y=50},player={cellX=5,cellY=6,py=96,facing="down",pose=function()return nil,80,96 end}}
 for _,m in ipairs({"above","third","pov"})do
   mode=m
   local base=assert(Camera.view(state,160,144,0))
@@ -71,4 +91,4 @@ for _,value in ipairs({"bad","nan","-1","100"})do
   near(distance,value=="100" and 144 or 0,"bounded setback")
   R.shutdown()
 end
-print("CAMERA_SETBACK_PASS: pinned CameraMode/Voxel3D, default0, explicit0.75m, POV unchanged,48px/m/IPD, bounded invalid config")
+print("CAMERA_SETBACK_PASS: pinned FirstPerson/DramalessStereo/Voxel3D, default0, explicit0.75m, POV unchanged,48px/m/IPD, bounded invalid config")

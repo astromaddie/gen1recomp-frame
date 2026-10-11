@@ -25,4 +25,4 @@ The [architecture notes](VR_ARCHITECTURE.md) explain the stereo camera, launcher
 
 ## Credits and licenses
 
-The engine is based on MIT-licensed [Polymatic Gen1Recomp](https://github.com/polymathiclabs/gen1recomp); the renderer comes from [DRAMALESS_SHAPE](https://github.com/artyrambles/DRAMALESS_SHAPE). Their pinned versions and license notices are listed in [LICENSES.md](LICENSES.md). The kit does not include Pokémon game data; supply it from your own copy.
+The engine is based on MIT-licensed [Polymatic Gen1Recomp](https://github.com/polymathiclabs/gen1recomp); the renderer comes from [DRAMALESS_SHAPE](https://github.com/artyrambles/DRAMALESS_SHAPE). My original Frame kit and VR additions use the [MIT license](LICENSE). The upstream notices are retained; their pinned versions and runtime licenses are listed in [LICENSES.md](LICENSES.md). The kit does not include Pokémon game data; supply it from your own copy.

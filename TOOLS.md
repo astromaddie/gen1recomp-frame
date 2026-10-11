@@ -333,3 +333,8 @@ original update path. The QA driver draws asserted transition stages, the first
 battle presentation, required stereo comparisons and return effects; it omits
 redundant intro raster work between captures. Eye size and scene geometry remain
 unchanged. These are host test shortcuts, not production performance changes.
+
+For the camera setback check, run `POKEPORT_XRBRIDGE=fake luajit
+integration/tests/camera_setback_test.lua integration/src/vr <assembled-mod>`.
+It uses the current pinned FirstPerson camera and the Frame stereo adapter,
+checks all three camera modes, and preserves physical IPD and world scale.
