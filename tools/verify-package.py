@@ -62,7 +62,7 @@ license_files_expected = {
     'SDL2.txt', 'OpenXR.txt', 'OpenAL.txt', 'Theora.txt', 'mpg123.txt'
 }
 def allowlisted(rel):
-    if rel in {'README.md', 'LICENSES.md', 'LICENSE-MIT-ENGINE', 'TOOLS.md', 'VR_ARCHITECTURE.md',
+    if rel in {'README.md', 'LICENSE', 'LICENSES.md', 'LICENSE-MIT-ENGINE', 'TOOLS.md', 'VR_ARCHITECTURE.md',
                'RUNTIME-IMAGE.json', 'PACKAGE-METADATA.json', 'SHA256SUMS',
                'XRBRIDGE-BUILD.json', 'XRBRIDGE-DEPS.txt', 'xrbridge.so',
                'vrbridge/CMakeLists.txt', 'vrbridge/xrbridge.cpp',
