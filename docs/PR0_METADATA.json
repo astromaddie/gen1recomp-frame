@@ -2,28 +2,33 @@
   "schema_version": 1,
   "milestone": "PR0",
   "status": "EXPERIMENTAL",
-  "publication_status": "private preparation; no release published",
-  "tested_commit": "5f824d0ca99f3592a96c59aa19908b973be6e0cf",
+  "publication_status": "ready for public source; no binary release",
+  "tested_commit": "61b98277b0516bc9d9819edbbea866de8f96b520",
   "supported_targets": [
     "Linux ARM64 / SteamLinuxRuntime_4-arm64 / SteamVR OpenXR"
   ],
   "validation": {
-    "commit": "5f824d0ca99f3592a96c59aa19908b973be6e0cf",
-    "initial_fresh_clone_status": "clean",
-    "integration_tree": "456e8548d4e4565363b51f6727a9fffda6efaa01",
-    "prior_tested_baseline": {
-      "commit": "966711e",
-      "integration_tree": "456e8548d4e4565363b51f6727a9fffda6efaa01",
-      "outcome": "nine focused LuaJIT tests reported passing by coordinator-provided assignment evidence; not rerun because the complete integration tree hash is identical"
+    "commit": "61b98277b0516bc9d9819edbbea866de8f96b520",
+    "fresh_checkout": "Clean local clone; empty build home; Git system/global configuration disabled; public source and archive fetches without Git credentials",
+    "public_sources": {
+      "engine": "Polymatic Gen1Recomp 1d2c421ff47f487d836589d38c6209b031bbce91",
+      "renderer": "DRAMALESS_SHAPE 97ca3e1f8f7c3aa0b3e671db497076150f494051",
+      "runtime": "All six archives fetched from public URLs and matched sources/SHA256SUMS"
     },
-    "pinned_image": "gen1recomp-frame-builder sha256:9d5562925b15d74f956e263434df866a225946fd81eaf3f840f266aa26eea402 linux/arm64",
-    "full_build": "NOT RUN"
+    "runtime_image": {
+      "image": "gen1recomp-pr0-builder:20261011",
+      "image_id": "sha256:8b2de2e862a3af37188d3338b06fd34fc33379199dad87116cce3ca8a46051c5",
+      "platform": "linux/arm64"
+    },
+    "runtime_build": "PASS: rebuilt ARM64 Ubuntu 22.04 runtime from public source archives; base/package installation built fresh, then cached only those freshly generated layers",
+    "bridge_build": "PASS: native ARM64 module, dependency closure, GLIBC<=2.35, GLIBCXX<=3.4.30 and real L\u00d6VE module import",
+    "lua_tests": "PASS: 17 regression scripts, including actual pinned renderer camera, launcher transitions, battle stereo, physical scale, UI composition and cleanup",
+    "package": "PASS: 76 checksums, 75 allowlisted files, 17 license notices, no ROM/save/game assembly",
+    "xrbridge_sha256": "b3c9fe33084e223e5a80c0a4cad13ca3f0ab7f368ddb1399d82a4a186ab2d8bc",
+    "package_inventory_sha256": "98751431b3d8c0391e1a6d91b9206de8b62bfee58ee4ab3e2522814be23dea2c"
   },
-  "full_application_build": "not run for PR0",
-  "focused_headset_acceptance": "pending for a clean candidate; historical results are documented separately",
-  "sustained_worn_performance": "unmeasured on current candidate",
+  "full_application_build": "PASS: runtime, native bridge and ROM-free Frame kit; user game assembly remains external",
   "distribution_blockers": [],
-  "license_scope": "Retained component notices apply to their stated code; they do not grant redistribution rights to commercial ROMs, extracted media, saves or proprietary libraries.",
-  "changelog": "README.md#pr0-changelog",
-  "validation_note": "Documentation-only changes; complete integration tree is identical to the tested baseline."
+  "license_scope": "MIT for original Frame kit/VR code; upstream engine/renderer and runtime notices remain. No permission to redistribute Pokemon ROMs, extracted data or saves.",
+  "changelog": "CHANGELOG.md"
 }
