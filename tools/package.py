@@ -88,13 +88,15 @@ def main():
     for rel in ('README.md', 'LICENSES.md', 'TOOLS.md', 'VR_ARCHITECTURE.md'):
         copy_file(kit_root / rel, output / rel, inventory)
     copy_file(kit_root / 'sources' / 'SHA256SUMS', output / 'sources' / 'SHA256SUMS', inventory)
-    copy_tree(kit_root / 'tools', output / 'tools', inventory,
-              lambda rel: rel in {
-                  'build-runtime.sh', 'export-runtime.sh', 'fetch-runtime-sources.py',
-                  'fetch-private-sources.py', 'assemble-local.py', 'LAUNCH-STEAM-FRAME.sh',
-                  'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py',
-                  'native-module-smoke/main.lua', 'native-module-smoke/conf.lua'
-              })
+    tool_files = {
+        'build-runtime.sh', 'export-runtime.sh', 'fetch-runtime-sources.py',
+        'fetch-private-sources.py', 'assemble-local.py', 'LAUNCH-STEAM-FRAME.sh',
+        'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py',
+        'SETUP-GAME.sh',
+        'native-module-smoke/main.lua', 'native-module-smoke/conf.lua'
+    }
+    for rel in sorted(tool_files):
+        copy_file(kit_root / 'tools' / rel, output / 'tools' / rel, inventory)
     copy_file(runtime_root / 'runtime-image.json', output / 'RUNTIME-IMAGE.json', inventory)
     bridge_report_path = bridge.with_name('xrbridge.build.json')
     bridge_deps_path = bridge.with_name('xrbridge-dependency-closure.txt')

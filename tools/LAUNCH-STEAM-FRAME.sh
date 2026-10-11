@@ -25,7 +25,7 @@ elif [[ "${1:-}" == --flat ]]; then
     export POKEPORT_VR_REQUIRED=0
 fi
 if [[ "$mode" != probe && ! -f "$kit_dir/game/main.lua" ]]; then
-    printf '%s\n' 'Private local game assembly missing. Run tools/assemble-local.py before launching.' >&2
+    printf '%s\n' 'Game files are missing. Run bash tools/SETUP-GAME.sh before launching.' >&2
     exit 2
 fi
 if [[ "$mode" == probe ]]; then

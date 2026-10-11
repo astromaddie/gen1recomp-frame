@@ -53,6 +53,7 @@ tool_files = {
     'build-runtime.sh', 'export-runtime.sh', 'fetch-runtime-sources.py',
     'fetch-private-sources.py', 'assemble-local.py', 'LAUNCH-STEAM-FRAME.sh',
     'package.py', 'Dockerfile', 'build-bridge.sh', 'build-bridge-in-container.sh', 'verify-package.py',
+    'SETUP-GAME.sh',
     'native-module-smoke/main.lua', 'native-module-smoke/conf.lua'
 }
 license_files_expected = {
