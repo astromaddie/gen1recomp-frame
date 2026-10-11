@@ -1,4 +1,4 @@
-# Steam Frame port architecture and acceptance
+# Steam Frame port architecture
 
 Target: native AArch64 ELF, SteamOS VR, SteamLinuxRuntime_4-arm64, OpenXR primary
 stereo with the active SteamVR runtime. Engine and voxel revisions are pinned in
