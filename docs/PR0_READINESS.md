@@ -1,6 +1,6 @@
 # PR0 — Gen1Recomp Frame
 
-**EXPERIMENTAL — ready for public source.** The Frame kit contains the launcher, VR bridge and renderer patches. Bring your own Pokémon game data; it is kept outside the kit. No binary release was uploaded.
+**EXPERIMENTAL — public source.** The Frame kit contains the launcher, VR bridge and renderer patches. Bring your own Pokémon game data; it is kept outside the kit. No binary release was uploaded.
 
 The clean build at `61b98277b0516bc9d9819edbbea866de8f96b520` fetched both pinned source projects and all six runtime archives from public URLs without personal Git credentials. Every archive matched `sources/SHA256SUMS`. The complete Linux ARM64 runtime image was rebuilt from those sources, then the native bridge was compiled and packaged against it. Dependency closure, ABI ceilings and a real LÖVE native-module import passed.
 

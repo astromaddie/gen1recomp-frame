@@ -2,7 +2,7 @@
   "schema_version": 1,
   "milestone": "PR0",
   "status": "EXPERIMENTAL",
-  "publication_status": "ready for public source; no binary release",
+  "publication_status": "public experimental source; no binary release",
   "tested_commit": "61b98277b0516bc9d9819edbbea866de8f96b520",
   "supported_targets": [
     "Linux ARM64 / SteamLinuxRuntime_4-arm64 / SteamVR OpenXR"
