@@ -346,10 +346,56 @@
 +      elseif paced then
 --- a/src/import/RomImporter.lua
 +++ b/src/import/RomImporter.lua
-@@ -1396 +1396 @@
+@@ -4,0 +5 @@
++local FrameRomDiscovery = require("src.import.FrameRomDiscovery")
+@@ -1223,0 +1225,31 @@
++  local frameError
++  local nativeVR = false
++  if love.system.getOS() == "Linux" then
++    local ok, runtime = pcall(require, "src.vr.Runtime")
++    if ok and runtime and type(runtime.isBridgeActive) == "function" then
++      local activeOk, active = pcall(runtime.isBridgeActive)
++      nativeVR = activeOk and active == true
++    end
++
++    -- Scan the Frame install before opening a blocking desktop picker.  The
++    -- native headset launch has no desktop to receive that modal dialog.
++    local name, data, rejected = FrameRomDiscovery.findPendingRom(self.ready)
++    if name then
++      self:startData(data, name)
++      return
++    end
++    frameError = rejected
++    if frameError then
++      self:setError(frameError)
++      if nativeVR then return end
++    end
++    if nativeVR then
++      self.notice = {
++        version = self.chooseVersion,
++        status = "No ROM found. Copy a supported .gb/.gbc into:",
++        detail = FrameRomDiscovery.recommendedDirectory(),
++      }
++      return
++    end
++  end
++
+@@ -1228,0 +1261,3 @@
++  -- Keep a rejected copied file visible after the user cancels or the desktop
++  -- picker is unavailable; it is more useful than a generic no-ROM notice.
++  if frameError then return end
+@@ -1239,4 +1273,0 @@
+-    local where = love.filesystem.getSourceBaseDirectory
+-      and love.filesystem.getSourceBaseDirectory()
+-      or love.filesystem.getSource and love.filesystem.getSource()
+-      or "the game folder"
+@@ -1246 +1277 @@
+-      detail = where,
++      detail = FrameRomDiscovery.recommendedDirectory(),
+@@ -1396 +1427 @@
 -  if self._lastMouseX and self._padCursorActive then
 +  if self._lastMouseX and self._padCursorActive and not self._vrLaserCursor then
-@@ -2624,2 +2624,3 @@
+@@ -2624,2 +2655,3 @@
 -  -- Gamepad virtual cursor (drawn last so it sits above the CRT overlay).
 -  if self._padCursorActive then
 +  -- Native VR draws its approved laser above the projected panel.

@@ -70,11 +70,16 @@ python3 "$GEN1_KIT_ROOT/tools/assemble-local.py" \
 The assembly checks both revisions and clean checkouts, applies the native
 `integration/main.lua.patch`, `integration/dramaless.patch`, plus
 `integration/src`, and writes a file hash manifest. Keep it outside both this
-tools tree and the distributable package.
-The game already supports player-provided ROM import through its file picker or
-`POKEPORT_IMPORT_ROM=/absolute/path/to/legally-obtained-rom`; the variable is
-consumed by the import path and does not copy the ROM into the kit. Never put
-ROMs, extracted caches, or saves in package output or Git.
+tools tree and the distributable package. For Steam Frame, put the player's
+`.gb` or `.gbc` file directly in `roms/` beside `game/` and `tools/`. The
+importer checks that folder plus the install root, the legacy mounted `game/`
+folder, and the app save folder. It only scans those folder levels, does not
+move or copy ROMs, and does not recursively search. Flat Linux desktop runs
+keep the native file picker; the native VR launcher instead shows the exact
+`roms/` path to use. `POKEPORT_IMPORT_ROM=/absolute/path/to/legally-obtained-rom`
+is also consumed by the import path. The supported clean US ROM sizes and
+SHA-1 values are listed in [README.md](README.md). Never put ROMs, extracted
+caches, or saves in package output or Git.
 
 ## Launch and package
 
@@ -136,13 +141,24 @@ arbitrary files from the source checkout.
 
 The kit package deliberately has no game tree or ROM. After assembling the
 player-local game and building the kit, create one install folder containing
-both pieces. This must be outside the source checkout:
+both pieces. This source-build workflow must be outside the source checkout.
+For the prebuilt v0.2.1 update, use the no-compiler steps in
+[README.md](README.md): extract to a fresh folder, run
+`tools/SETUP-GAME.sh`, and point the existing Steam shortcut or SteamOS Devkit
+upload at the new folder. Setup refuses to replace an existing `game/`
+directory, so do not unpack over an older install. Game data stays under the
+XDG data root, which defaults to `$HOME/.local/share/Gen1RecompFrame`; if you
+set `GEN1_FRAME_DATA_DIR`, keep using the same directory to retain saves and
+caches.
+
+For the source-built install, create a fresh folder containing both pieces:
 
 ```sh
 mkdir -p "$GEN1_WORK_DIR/frame-install"
 cp -a "$GEN1_WORK_DIR/native-kit-release/." "$GEN1_WORK_DIR/frame-install/"
 mkdir -p "$GEN1_WORK_DIR/frame-install/game"
 cp -a "$GEN1_WORK_DIR/local-assembly/game/." "$GEN1_WORK_DIR/frame-install/game/"
+mkdir -p "$GEN1_WORK_DIR/frame-install/roms"
 ```
 
 For a first install from another computer, follow Valve's [Steam Frame
@@ -155,14 +171,21 @@ guide](https://partner.steamgames.com/doc/steamhardware/steamframe/loadgames)
 describes those fields. The upload creates the Steam library entry. Launch it
 there so SteamVR supplies the OpenXR and controller runtime.
 
+Create `frame-install/roms/` and place your own supported ROM directly in it
+before starting the native VR launcher. You can also copy the file while the
+game is running and press **Import ROM** again. Choose **Import ROM**, wait for
+extraction to complete, then choose **Play**. The importer scans only files
+directly in that folder.
+
 For a local Frame Desktop install, copy the complete `frame-install/` folder
 to a writable location under your home directory, then add
 `tools/LAUNCH-STEAM-FRAME.sh` through Steam's **Add a Non-Steam Game** flow
 and start it from the Steam library. Do not try to launch the bridge or game
-directly. On first launch, use the game's file picker to import your own
-supported 1 MiB `.gb` or `.gbc` Red, Blue, or Yellow image. No single ROM hash
-is pinned by this multi-game kit; the ROM, generated cache, and saves remain
-player-local and are excluded from the kit package.
+directly. Use the native file picker in flat desktop mode, or place the ROM
+directly in `frame-install/roms/` before launching. The importer supports the
+three clean US ROM hashes documented in [README.md](README.md); the ROM,
+generated cache, and saves remain player-local and are excluded from the kit
+package.
 
 ## Presentation regressions
 
@@ -256,6 +279,48 @@ Full eye images must agree within 0.02 aggregate RGB; max/mean channel errors
 and nonzero pixel counts are also reported. `QA_CONTROL=1` compares off/off
 to isolate draw-time animation or state changes.
 Private art and screenshots never belong in the distributable kit.
+
+## Steam Frame ROM import regression
+
+This LOVE 11.5 harness exercises the assembled production importer and discovery
+module with synthetic 1 MiB fixtures only. It checks the pinned upstream
+baseline, current `choose()` behavior, desktop versus VR picker behavior, and
+the existing notice/error cards at 800×600. Fetch the pinned sources as above,
+then run from a fresh QA directory outside the checkout:
+
+```sh
+export QA_ROOT="$GEN1_WORK_DIR/rom-import-qa"
+export ROM_IMPORT_FIXTURE="Frame ROM ' ; touch scan-was-not-shell-injected ;"
+mkdir -p "$QA_ROOT"
+python3 "$GEN1_KIT_ROOT/tools/assemble-local.py" \
+  --engine "$GEN1_WORK_DIR/upstream-sources/gen1recomp" \
+  --voxel "$GEN1_WORK_DIR/upstream-sources/DRAMALESS_SHAPE" \
+  --kit "$GEN1_KIT_ROOT" --output "$QA_ROOT/assembly"
+cp -a "$GEN1_KIT_ROOT/integration/tests/rom_importer_frame" "$QA_ROOT/harness"
+mkdir -p "$QA_ROOT/output/$ROM_IMPORT_FIXTURE"
+docker run --rm --platform linux/arm64 -w "/out/$ROM_IMPORT_FIXTURE" \
+  -v "$QA_ROOT/harness:/test:ro" \
+  -v "$QA_ROOT/assembly/game:/engine:ro" \
+  -v "$QA_ROOT/output:/out" \
+  -e "XDG_DATA_HOME=/out/$ROM_IMPORT_FIXTURE/xdg" \
+  -e FRAME_IMPORT_TEST_SOURCE=/engine \
+  -e "FRAME_IMPORT_TEST_FIXTURE_ROOT=/out/$ROM_IMPORT_FIXTURE" \
+  gen1recomp-frame-builder:latest sh -c '
+    Xvfb :91 -screen 0 1280x1024x24 -nolisten tcp >/dev/null 2>&1 &
+    xvfb_pid=$!
+    sleep 1
+    DISPLAY=:91 timeout 120s /opt/love/bin/love /test
+    result=$?
+    kill "$xvfb_pid" 2>/dev/null || true
+    wait "$xvfb_pid" 2>/dev/null || true
+    exit "$result"'
+```
+
+All writable test data, including the synthetic ROMs and captured cards, stays
+under `QA_ROOT/output`; the assembled game and harness are mounted read-only.
+The optional baseline reproduction uses the same harness with
+`FRAME_IMPORT_TEST_SOURCE` pointed at the clean pinned engine checkout and
+`FRAME_IMPORT_TEST_BASELINE=1`.
 
 ## DRAMALESS replacement checks
 
